@@ -1,3 +1,20 @@
+// Copyright (C) 2026 SayIt Contributors
+//
+// This file is part of SayIt.
+//
+// This program is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// This program is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with this program.  If not, see <https://www.gnu.org/licenses/>.
+
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -9,6 +26,7 @@ import 'package:path_provider/path_provider.dart';
 
 import 'src/text_segmenter.dart';
 import 'src/wav_concat.dart';
+import 'src/voice_data.dart';
 
 void main() {
   runApp(const SayItApp());
@@ -20,7 +38,7 @@ class SayItApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'SayIt',
+      title: '说吧',
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
         useMaterial3: true,
@@ -84,28 +102,18 @@ class _SayItHomePageState extends State<SayItHomePage> {
   Duration _currentPosition = Duration.zero;
   Duration _totalDuration = Duration.zero;
 
-  static const _voices = <Map<String, String>>[
-    {'name': '晓晓(女)-温柔亲切', 'value': 'zh-CN-XiaoxiaoNeural'},
-    {'name': '云希(女)-活泼可爱', 'value': 'zh-CN-YunxiNeural'},
-    {'name': '云扬(男)-成熟专业', 'value': 'zh-CN-YunyangNeural'},
-    {'name': '云野(男)-沉稳有力', 'value': 'zh-CN-YunyeNeural'},
-    {'name': '小艺(女)-青春活泼', 'value': 'zh-CN-XiaoyiNeural'},
-    {'name': '云夏(女)-清新柔和', 'value': 'zh-CN-YunxiaNeural'},
-    {'name': '晓涵(女)-知性冷静', 'value': 'zh-CN-XiaohanNeural'},
-    {'name': '晓睿(女)-聪慧成熟', 'value': 'zh-CN-XiaoruiNeural'},
-    {'name': '晓双(女)-俏皮活泼', 'value': 'zh-CN-XiaoshuangNeural'},
-    {'name': '晓瑄(女)-温婉优雅', 'value': 'zh-CN-XiaoxuanNeural'},
-    {'name': '晓燕(女)-亲和温暖', 'value': 'zh-CN-XiaoyanNeural'},
-    {'name': '小雪(女)-轻柔甜美', 'value': 'zh-CN-XiaoxueNeural'},
-    {'name': '云绯(女)-优雅知性', 'value': 'zh-CN-YunfeiNeural'},
-    {'name': '云健(男)-健康活力', 'value': 'zh-CN-YunjianNeural'},
-    {'name': '云霖(男)-沉稳温和', 'value': 'zh-CN-YunlinNeural'},
-    {'name': '云龙(男)-浑厚有力', 'value': 'zh-CN-YunlongNeural'},
-  ];
   String _selectedVoice = 'zh-CN-XiaoxiaoNeural';
+  String _selectedLanguage = 'zh-CN';
+  String _selectedGender = 'female';
   double _speed = 1.0;
   double _pitch = 0.0;
   double _volume = 1.0;
+
+  List<VoiceInfo> get _filteredVoices {
+    return voiceData.where((v) =>
+      v.languageCode == _selectedLanguage && v.gender == _selectedGender
+    ).toList();
+  }
 
   @override
   void initState() {
@@ -156,7 +164,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
   }
 
   Future<SynthesisResult> _synthesizeText(String text, String voice, double speed, double pitch, double volume) async {
-    final pocBinary = '/Users/xingxiaoshu/开发/SayIt/sayit-poc/target/debug/sayit-poc';
+    final pocBinary = Platform.environment['SAYIT_POC_BINARY'] ?? '../../sayit-poc/target/debug/sayit-poc';
     final processedText = TextSegmenter.preprocessText(text);
     final ratePercent = ((speed - 1.0) * 100).round();
     final rate = ratePercent >= 0 ? '+$ratePercent%' : '$ratePercent%';
@@ -200,11 +208,6 @@ class _SayItHomePageState extends State<SayItHomePage> {
   }
 
   Future<void> _generateAndPlay() async {
-    if (_isPlaying) {
-      await _audioPlayer.pause();
-      return;
-    }
-
     final text = _textController.text.trim();
     if (text.isEmpty) {
       setState(() {
@@ -263,6 +266,14 @@ class _SayItHomePageState extends State<SayItHomePage> {
     }
   }
 
+  Future<void> _togglePause() async {
+    if (_isPlaying) {
+      await _audioPlayer.pause();
+    } else {
+      await _audioPlayer.play();
+    }
+  }
+
   Future<void> _exportWav() async {
     if (_sentences.isEmpty) {
       _segmentText();
@@ -318,16 +329,113 @@ class _SayItHomePageState extends State<SayItHomePage> {
     }
   }
 
+  Future<void> _importSettings() async {
+    final result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
+
+    if (result != null && result.files.single.path != null) {
+      try {
+        final file = File(result.files.single.path!);
+        final content = await file.readAsString();
+        final settings = jsonDecode(content) as Map<String, dynamic>;
+
+        setState(() {
+          _selectedVoice = settings['voice'] as String? ?? _selectedVoice;
+          _selectedLanguage = settings['language'] as String? ?? _selectedLanguage;
+          _selectedGender = settings['gender'] as String? ?? _selectedGender;
+          _speed = (settings['speed'] as num?)?.toDouble() ?? _speed;
+          _pitch = (settings['pitch'] as num?)?.toDouble() ?? _pitch;
+          _volume = (settings['volume'] as num?)?.toDouble() ?? _volume;
+        });
+
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('设定已导入')),
+        );
+      } catch (e) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('导入失败: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _exportSettings() async {
+    final settings = {
+      'voice': _selectedVoice,
+      'language': _selectedLanguage,
+      'gender': _selectedGender,
+      'speed': _speed,
+      'pitch': _pitch,
+      'volume': _volume,
+    };
+
+    final directory = await getApplicationDocumentsDirectory();
+    final timestamp = DateTime.now().millisecondsSinceEpoch;
+    final filePath = '${directory.path}/sayit_settings_$timestamp.json';
+
+    final file = File(filePath);
+    await file.writeAsString(jsonEncode(settings));
+
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(content: Text('设定已导出: $filePath')),
+    );
+  }
+
+  void _showAbout() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('说吧'),
+        content: const Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text('版本: v0.1'),
+            SizedBox(height: 8),
+            Text('开发者: MagicianEW'),
+            SizedBox(height: 16),
+            Text('许可证: GPL-3.0-or-later'),
+            SizedBox(height: 8),
+            Text('本软件遵循 GPL-3.0-or-later 协议开源。'),
+          ],
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
       appBar: AppBar(
-        title: const Text('SayIt'),
+        title: const Text('说吧'),
         actions: [
           IconButton(
             icon: const Icon(Icons.file_open),
             onPressed: _importText,
             tooltip: '导入文本文件',
+          ),
+          IconButton(
+            icon: const Icon(Icons.settings_backup_restore),
+            onPressed: _importSettings,
+            tooltip: '导入设定',
+          ),
+          IconButton(
+            icon: const Icon(Icons.save),
+            onPressed: _exportSettings,
+            tooltip: '导出设定',
+          ),
+          IconButton(
+            icon: const Icon(Icons.info_outline),
+            onPressed: _showAbout,
+            tooltip: '关于',
           ),
         ],
       ),
@@ -356,12 +464,18 @@ class _SayItHomePageState extends State<SayItHomePage> {
                 const SizedBox(width: 8),
                 ElevatedButton.icon(
                   onPressed: _isGenerating ? null : _generateAndPlay,
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-                  label: Text(_isPlaying ? '暂停' : '生成并播放'),
+                  icon: const Icon(Icons.play_arrow),
+                  label: const Text('生成并播放'),
                 ),
                 const SizedBox(width: 8),
                 IconButton(
-                  onPressed: _isPlaying ? () => _audioPlayer.stop() : null,
+                  onPressed: _isGenerating ? null : _togglePause,
+                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                  tooltip: _isPlaying ? '暂停' : '继续',
+                ),
+                const SizedBox(width: 8),
+                IconButton(
+                  onPressed: (_isPlaying || _totalDuration.inMilliseconds > 0) ? () => _audioPlayer.stop() : null,
                   icon: const Icon(Icons.stop),
                   tooltip: '停止',
                 ),
@@ -373,16 +487,57 @@ class _SayItHomePageState extends State<SayItHomePage> {
                 ),
                 const Spacer(),
                 DropdownButton<String>(
-                  value: _selectedVoice,
-                  items: _voices.map((v) => DropdownMenuItem(
-                    value: v['value'],
-                    child: Text(v['name']!),
+                  value: _selectedLanguage,
+                  items: languages.map((l) => DropdownMenuItem(
+                    value: l['code'],
+                    child: Text(l['name']!, style: const TextStyle(fontSize: 12)),
                   )).toList(),
                   onChanged: (value) {
                     if (value != null) {
-                      setState(() => _selectedVoice = value);
+                      setState(() {
+                        _selectedLanguage = value;
+                        final filtered = _filteredVoices;
+                        if (filtered.isNotEmpty) {
+                          _selectedVoice = filtered.first.value;
+                        }
+                      });
                     }
                   },
+                ),
+                const SizedBox(width: 4),
+                DropdownButton<String>(
+                  value: _selectedGender,
+                  items: genders.map((g) => DropdownMenuItem(
+                    value: g['code'],
+                    child: Text(g['name']!, style: const TextStyle(fontSize: 12)),
+                  )).toList(),
+                  onChanged: (value) {
+                    if (value != null) {
+                      setState(() {
+                        _selectedGender = value;
+                        final filtered = _filteredVoices;
+                        if (filtered.isNotEmpty) {
+                          _selectedVoice = filtered.first.value;
+                        }
+                      });
+                    }
+                  },
+                ),
+                const SizedBox(width: 4),
+                Flexible(
+                  child: DropdownButton<String>(
+                    value: _selectedVoice,
+                    isExpanded: true,
+                    items: _filteredVoices.map((v) => DropdownMenuItem(
+                      value: v.value,
+                      child: Text(v.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                    )).toList(),
+                    onChanged: (value) {
+                      if (value != null) {
+                        setState(() => _selectedVoice = value);
+                      }
+                    },
+                  ),
                 ),
               ],
             ),
@@ -424,9 +579,6 @@ class _SayItHomePageState extends State<SayItHomePage> {
                     onChanged: (value) {
                       setState(() {
                         _speed = value;
-                        if (_sentences.isNotEmpty) {
-                          _statusMessage = '参数已调整，点击"重新生成"试听效果';
-                        }
                       });
                     },
                   ),
@@ -447,9 +599,6 @@ class _SayItHomePageState extends State<SayItHomePage> {
                     onChanged: (value) {
                       setState(() {
                         _pitch = value;
-                        if (_sentences.isNotEmpty) {
-                          _statusMessage = '参数已调整，点击"重新生成"试听效果';
-                        }
                       });
                     },
                   ),
@@ -470,20 +619,11 @@ class _SayItHomePageState extends State<SayItHomePage> {
                     onChanged: (value) {
                       setState(() {
                         _volume = value;
-                        if (_sentences.isNotEmpty) {
-                          _statusMessage = '参数已调整，点击"重新生成"试听效果';
-                        }
                       });
                     },
                   ),
                 ),
                 Text('${(_volume * 100).round()}%'),
-                const SizedBox(width: 8),
-                if (_sentences.isNotEmpty)
-                  TextButton(
-                    onPressed: _isGenerating ? null : _generateAndPlay,
-                    child: const Text('重新生成'),
-                  ),
               ],
             ),
             if (_statusMessage != null)
