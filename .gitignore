@@ -1,0 +1,41 @@
+# ============================================================
+# Rust / Cargo
+# ============================================================
+target/
+**/*.rs.bk
+Cargo.lock
+
+# ============================================================
+# Flutter / Dart
+# ============================================================
+apps/sayit_app/.dart_tool/
+apps/sayit_app/.flutter-plugins
+apps/sayit_app/.flutter-plugins-dependencies
+apps/sayit_app/.packages
+apps/sayit_app/build/
+apps/sayit_app/.idea/
+apps/sayit_app/.vscode/
+apps/sayit_app/android/  # PoC 阶段不构建 Android
+apps/sayit_app/ios/      # PoC 阶段不构建 iOS
+apps/sayit_app/linux/    # V1 不支持 Linux
+apps/sayit_app/web/      # PoC 阶段不构建 Web
+apps/sayit_app/.pub-cache/
+apps/sayit_app/.pub/
+apps/sayit_app/coverage/
+
+# ============================================================
+# PoC 阶段临时文件
+# ============================================================
+sayit-poc/reports/*.json
+sayit-poc/reports/*.md
+!sayit-poc/reports/.gitkeep
+
+# ============================================================
+# 通用
+# ============================================================
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.log

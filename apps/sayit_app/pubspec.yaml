@@ -1,0 +1,26 @@
+name: sayit_app
+description: "SayIt - Personal TTS desktop app (Stage 1b: Flutter + Rust bridge)"
+publish_to: 'none'
+version: 0.1.0
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+  flutter: '>=3.22.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  ffi: ^2.1.0
+  riverpod: ^2.5.0
+  just_audio: ^0.9.40
+  file_picker: ^8.0.0
+  path_provider: ^2.1.0
+  flutter_rust_bridge: ^2.0.0
+
+dev_dependencies:
+  flutter_lints: ^4.0.0
+  ffigen: ^14.0.0
+  build_runner: ^2.4.0
+
+flutter:
+  uses-material-design: true

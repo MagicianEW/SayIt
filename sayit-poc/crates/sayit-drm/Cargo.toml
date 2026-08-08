@@ -1,0 +1,14 @@
+[package]
+name = "sayit-drm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SayIt Edge TTS DRM (Sec-MS-GEC) token generator — Rust port of rany2/edge-tts drm.py"
+
+[dependencies]
+thiserror = { workspace = true }
+sha2 = "0.10"
+hex = "0.4"
+
+[dev-dependencies]
+# PoC 阶段离线对照测试，不联网

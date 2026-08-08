@@ -1,0 +1,23 @@
+[package]
+name = "sayit-poc-bin"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SayIt PoC verification harness (Stage 1a)"
+
+[[bin]]
+name = "sayit-poc"
+path = "src/main.rs"
+
+[dependencies]
+sayit-drm = { path = "../sayit-drm" }
+sayit-edge = { path = "../sayit-edge" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+clap = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+env_logger = { workspace = true }
+chrono = { workspace = true }
+base64 = { workspace = true }

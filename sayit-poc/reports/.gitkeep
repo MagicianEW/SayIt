@@ -1,0 +1,12 @@
+# PoC 输出报告
+
+每个用例的运行结果落一份 JSON + Markdown 摘要：
+
+| 文件 | 用途 |
+| :--- | :--- |
+| `case1_pcm.json` | 用例 1：PCM 直出（采样率、通道数、首尾样本） |
+| `case3_drm.json` | 用例 3：DRM Token 形状、长度、时变样本 |
+| `case4_boundary_offset.json` | 用例 4：SSML 边界偏移语义（关键） |
+| `boundary_offset_semantics.md` | 用例 4 的人类可读结论 |
+
+> 这些报告是阶段 1b / 2 选型的依据，未产出报告视作用例未跑通。

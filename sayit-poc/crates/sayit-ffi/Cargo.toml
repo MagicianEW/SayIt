@@ -1,0 +1,17 @@
+[package]
+name = "sayit-ffi"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SayIt FFI bridge for Flutter (cdylib)"
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+sayit-edge = { path = "../sayit-edge" }
+sayit-drm = { path = "../sayit-drm" }
+flutter_rust_bridge = "=2.12.0"
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }

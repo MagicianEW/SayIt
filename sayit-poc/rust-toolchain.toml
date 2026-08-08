@@ -1,0 +1,5 @@
+[toolchain]
+# PoC 阶段使用 stable；1b 接入 flutter_rust_bridge 时评估是否需要 nightly
+channel = "stable"
+components = ["rustfmt", "clippy"]
+profile = "minimal"

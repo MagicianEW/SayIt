@@ -1,0 +1,25 @@
+[package]
+name = "sayit-edge"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "SayIt Edge TTS client (Rust) — embeds Python edge-tts via subprocess to bypass rustls TLS fingerprint issues"
+
+[dependencies]
+sayit-drm = { path = "../sayit-drm" }
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+log = { workspace = true }
+futures-util = { workspace = true }
+bytes = { workspace = true }
+chrono = { workspace = true }
+hex = { workspace = true }
+base64 = { workspace = true }
+flutter_rust_bridge = "2"
+
+# 注意：PoC 阶段不用 rustls / tokio-tungstenite / native-tls
+# 直接子进程调 Python edge-tts，绕开 TLS 指纹问题
+# 1b 阶段如需纯 Rust 客户端，重新评估
