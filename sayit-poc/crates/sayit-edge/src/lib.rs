@@ -373,3 +373,4 @@ mod tests {
         assert!(!c.output_format.is_empty());
     }
 }
+
