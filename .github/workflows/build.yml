@@ -4,6 +4,9 @@ on:
   release:
     types: [created]
 
+permissions:
+  contents: write
+
 env:
   RUST_BACKTRACE: 1
 
@@ -48,9 +51,10 @@ jobs:
           zip -r SayIt_macos.zip SayIt.app
 
       - name: Upload to Release
-        uses: softprops/action-gh-release@v2
+        uses: ncipollo/release-action@v1
         with:
           files: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
 
   build-windows:
     runs-on: windows-latest
@@ -86,6 +90,7 @@ jobs:
           Compress-Archive -Path * -DestinationPath SayIt_windows.zip
 
       - name: Upload to Release
-        uses: softprops/action-gh-release@v2
+        uses: ncipollo/release-action@v1
         with:
           files: apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip
+          token: ${{ secrets.GITHUB_TOKEN }}
