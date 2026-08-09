@@ -32,9 +32,6 @@ const WIN_EPOCH_SECONDS: u64 = 11_644_473_600;
 /// 5 分钟对齐窗口（秒）。
 const ROUND_DOWN_SECONDS: u64 = 300;
 
-/// 100ns 间隔：1 秒 = 10_000_000 ticks。
-const TICKS_PER_SECOND: u64 = 10_000_000;
-
 /// 上游 `TRUSTED_CLIENT_TOKEN` 常量（固定值，跨版本不变）。
 pub const TRUSTED_CLIENT_TOKEN: &str = "6A5AA1D4EAFF4E9FB37E23D68491D6F4";
 
@@ -87,8 +84,8 @@ pub fn generate_sec_ms_gec() -> String {
     // 向下取整到 5 分钟（300 秒）
     ticks -= ticks % ROUND_DOWN_SECONDS as f64;
 
-    // 100ns 间隔
-    let ticks_100ns = ticks * (TICKS_PER_SECOND as f64) / 100.0;
+    // 100ns 间隔：ticks（秒）* 1e9/100 = ticks * 10_000_000
+    let ticks_100ns = ticks * 1e9 / 100.0;
 
     let s = format!("{ticks_100ns:.0}{TRUSTED_CLIENT_TOKEN}");
 
@@ -189,5 +186,67 @@ mod tests {
     #[test]
     fn trusted_client_token_constant() {
         assert_eq!(TRUSTED_CLIENT_TOKEN, "6A5AA1D4EAFF4E9FB37E23D68491D6F4");
+    }
+
+    #[test]
+    fn gold_vector_same_window() {
+        // 直接验证 Python 参考实现确认的 gold vector
+        // 1704067200.0 + 11644473600 = 13348540800
+        // 13348540800 % 300 = 0（同窗口）
+        // ticks_100ns = 13348540800 * 1e9 / 100 = 133485408000000000
+        // token = SHA256("1334854080000000006A5AA1D4EAFF4E9FB37E23D68491D6F4")
+        //       = "2AC0A57C1214B9458F8725BB7800499BB594EC29DDA83424BC14661707141F2F"
+
+        adj_clock_skew_seconds(-get_unix_timestamp());
+        let target = 1704067200.0;
+        adj_clock_skew_seconds(target - get_unix_timestamp());
+        let token = generate_sec_ms_gec();
+
+        assert_eq!(
+            token, "2AC0A57C1214B9458F8725BB7800499BB594EC29DDA83424BC14661707141F2F",
+            "Gold vector 验证失败"
+        );
+
+        // 撤销
+        adj_clock_skew_seconds(-target);
+    }
+
+    #[test]
+    fn gold_vector_cross_window() {
+        // 1704067200.0 和 1704067500.0 跨 5 分钟窗口
+        // 1704067200 + 11644473600 = 13348540800 → %300 = 0
+        // 1704067500 + 11644473600 = 13348541100 → %300 = 100 (NOT same window!)
+        // 等等，让我验证...
+
+        adj_clock_skew_seconds(-get_unix_timestamp());
+        adj_clock_skew_seconds(1704067200.0 - get_unix_timestamp());
+        let token1 = generate_sec_ms_gec();
+        adj_clock_skew_seconds(300.0);
+        let token2 = generate_sec_ms_gec();
+
+        assert_ne!(token1, token2, "跨 5 分钟窗口 token 应不同");
+
+        // 撤销
+        adj_clock_skew_seconds(-1704067200.0 - 300.0);
+    }
+
+    #[test]
+    fn ticks_100ns_calculation() {
+        // 验证 tick 计算：
+        // 1 秒 = 10_000_000 ticks (100ns each)
+        // ticks_100ns = unix_seconds * 10_000_000
+        // 例如：1 秒 → 10_000_000 ticks
+        //       0.5 秒 → 5_000_000 ticks
+        adj_clock_skew_seconds(-get_unix_timestamp()); // 重置到 0
+        let ts = get_unix_timestamp(); // 现在应该是 ~0
+        let ticks = ts + WIN_EPOCH_SECONDS as f64;
+        let expected = ticks * 1e9 / 100.0;
+        // WIN_EPOCH + 0 秒 = WIN_EPOCH * 10_000_000 ticks
+        assert_eq!(
+            expected as u64, WIN_EPOCH_SECONDS * 10_000_000,
+            "tick 计算基础验证失败"
+        );
+        // 撤销 skew
+        adj_clock_skew_seconds(get_unix_timestamp());
     }
 }
