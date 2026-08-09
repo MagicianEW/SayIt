@@ -28,6 +28,51 @@
 
 从 [Releases](https://github.com/MagicianEW/SayIt/releases) 页面下载最新版本。
 
+## 前置依赖
+
+SayIt 需要 **Python 3.8+** 和 **edge_tts** 模块。
+
+### 安装 Python 和 edge_tts
+
+**macOS**（通常已预装 Python）：
+```bash
+# 检查 Python 版本
+python3 --version
+
+# 安装 edge_tts
+pip3 install edge_tts
+# 或使用虚拟环境
+python3 -m venv ~/.sayit-venv
+~/.sayit-venv/bin/pip install edge_tts
+```
+
+**Windows**：
+```powershell
+# 安装 Python（如果没有）
+# 从 https://python.org 下载 Python 3.8+
+
+# 安装 edge_tts
+pip install edge_tts
+```
+
+**Linux**：
+```bash
+sudo apt install python3 python3-pip  # Debian/Ubuntu
+sudo yum install python3 python3-pip    # Fedora/RHEL
+pip3 install edge_tts
+```
+
+### 验证安装
+```bash
+python3 -c "import edge_tts; print('edge_tts OK')"
+```
+
+### 自定义 Python 路径（可选）
+如果 Python 不在默认路径，可通过环境变量指定：
+```bash
+export SAYIT_PYTHON=/path/to/your/python3
+```
+
 ## macOS 安装说明
 
 ⚠️ 当前 release 为**临时签名**（ad-hoc），未通过 Apple 公证。首次打开会提示"无法验证开发者"。

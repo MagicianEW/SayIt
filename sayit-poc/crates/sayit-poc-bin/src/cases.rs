@@ -314,6 +314,11 @@ pub struct BoundaryOutput {
 }
 
 pub async fn synthesize_text(opts: SynthOpts) -> anyhow::Result<SynthesisOutput> {
+    // 预检 Python 环境
+    if let Err(e) = sayit_edge::EdgeClient::check_python_env() {
+        anyhow::bail!("Python 环境检查失败: {}", e);
+    }
+
     let python_path = std::env::var("SAYIT_PYTHON")
         .unwrap_or_else(|_| {
             let home = std::env::var("HOME").unwrap_or_default();

@@ -139,6 +139,58 @@ impl EdgeClient {
         }
     }
 
+    /// 检查 Python 环境是否可用（python3 和 edge_tts 模块）。
+    /// 如果不可用，返回包含清晰错误信息的 Err。
+    pub fn check_python_env() -> Result<String, String> {
+        let python_path = std::env::var("SAYIT_PYTHON")
+            .unwrap_or_else(|_| {
+                let home = std::env::var("HOME").unwrap_or_default();
+                let venv_py = format!("{home}/.sayit-venv/bin/python3");
+                if std::path::Path::new(&venv_py).exists() {
+                    venv_py
+                } else {
+                    "python3".to_string()
+                }
+            });
+
+        // 检查 python3 是否存在
+        let python_check = std::process::Command::new(&python_path)
+            .args(["-c", "import sys; print(sys.version_info[0])"])
+            .output();
+
+        let python_version = match python_check {
+            Ok(output) if output.status.success() => {
+                String::from_utf8_lossy(&output.stdout).trim().to_string()
+            }
+            Ok(_) | Err(_) => {
+                return Err(format!(
+                    "Python '{}' 不可用或执行失败。请安装 Python 3.8+ 并确保在 PATH 中。",
+                    python_path
+                ));
+            }
+        };
+
+        // 检查 edge_tts 模块是否安装
+        let edge_check = std::process::Command::new(&python_path)
+            .args(["-c", "import edge_tts; print('ok')"])
+            .output();
+
+        match edge_check {
+            Ok(output) if output.status.success() => {
+                Ok(format!("Python {}.x, edge_tts 可用", python_version))
+            }
+            Ok(_) | Err(_) => {
+                Err(format!(
+                    "Python '{}' 已安装，但 edge_tts 模块未安装。\n\
+                    请运行: pip install edge_tts\n\
+                    或创建虚拟环境:\n\
+                    python3 -m venv ~/.sayit-venv && ~/.sayit-venv/bin/pip install edge_tts",
+                    python_path
+                ))
+            }
+        }
+    }
+
     /// 发起一次合成请求（子进程 + edge-tts）。
     pub async fn synthesize(
         &self,
