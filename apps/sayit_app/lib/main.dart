@@ -323,7 +323,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
     }
   }
 
-  Future<void> _exportWav() async {
+  Future<void> _exportAudio() async {
     if (_sentences.isEmpty) {
       _segmentText();
       if (_sentences.isEmpty) return;
@@ -341,22 +341,20 @@ class _SayItHomePageState extends State<SayItHomePage> {
         if (!mounted) return;
         final result = await _synthesizeText(sentence.text, _selectedVoice, _speed, _pitch, _volume);
         audioChunks.add(result.audio);
-
-        if (sentence.breakTimeMs > 0) {
-          final silence = WavConcat.createSilence(sentence.breakTimeMs);
-          audioChunks.add(silence);
-        }
       }
 
       if (!mounted) return;
 
-      final combined = WavConcat.concatenate(audioChunks);
+      final combined = <int>[];
+      for (final chunk in audioChunks) {
+        combined.addAll(chunk);
+      }
 
       final directory = await getApplicationDocumentsDirectory();
       final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final filePath = '${directory.path}/sayit_export_$timestamp.wav';
+      final filePath = '${directory.path}/sayit_export_$timestamp.mp3';
 
-      await File(filePath).writeAsBytes(combined);
+      await File(filePath).writeAsBytes(Uint8List.fromList(combined));
 
       if (!mounted) return;
       setState(() {
@@ -568,7 +566,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
                       ),
                       const SizedBox(width: 8),
                       ElevatedButton.icon(
-                        onPressed: _isGenerating ? null : _exportWav,
+                        onPressed: _isGenerating ? null : _exportAudio,
                         icon: const Icon(Icons.save_alt),
                         label: const Text('导出'),
                       ),
