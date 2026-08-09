@@ -109,18 +109,18 @@ jobs:
 
       - name: Create Inno Setup Script
         run: |
-          $script = @'
-          [Setup]
-          AppName=SayIt
-          AppVersion=0.1
-          DefaultDirName={autopf}\SayIt
-          OutputDir=.
-          OutputBaseFilename=SayIt_setup
-          Compression=lzma2
-          [Files]
-          Source="*";DestDir="{app}";Flags:recursesubdirs
-          '@
-          $script | Out-File -FilePath "apps/sayit_app/build/windows/runner/Release/sayit.iss" -Encoding UTF8
+          $lines = @(
+            "[Setup]",
+            "AppName=SayIt",
+            "AppVersion=0.1",
+            "DefaultDirName={autopf}\SayIt",
+            "OutputDir=.",
+            "OutputBaseFilename=SayIt_setup",
+            "Compression=lzma2",
+            "[Files]",
+            'Source="*";DestDir="{app}";Flags:recursesubdirs'
+          )
+          $lines | Out-File -FilePath "apps/sayit_app/build/windows/runner/Release/sayit.iss" -Encoding ASCII
 
       - name: Build Installer
         run: |
