@@ -52,24 +52,33 @@ jobs:
           cp sayit-poc/target/release/sayit-poc apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/
           chmod +x apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
 
-      - name: Create ZIP
+      - name: Create DMG
         run: |
           cd apps/sayit_app/build/macos/Build/Products/Release
-          zip -r SayIt_macos.zip SayIt.app
+          mkdir -p SayIt_dmg
+          cp -R SayIt.app SayIt_dmg/
+          brew install create-dmg
+          create-dmg \
+            --volname "SayIt" \
+            --volicon "SayIt_dmg/SayIt.app/Contents/Resources/AppIcon.icns" \
+            --window-pos 200 120 \
+            --size 200m \
+            "SayIt.dmg" \
+            "SayIt_dmg/"
 
       - name: Upload to Release
         if: github.event.inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip --clobber
+          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/macos/Build/Products/Release/SayIt.dmg --clobber
 
       - name: Upload to Release (release trigger)
         if: github.event.inputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip --clobber
+          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/macos/Build/Products/Release/SayIt.dmg --clobber
 
   build-windows:
     runs-on: windows-latest
@@ -99,21 +108,35 @@ jobs:
           mkdir -p apps/sayit_app/build/windows/runner/Release/bin
           cp sayit-poc/target/release/sayit-poc.exe apps/sayit_app/build/windows/runner/Release/bin/
 
-      - name: Create ZIP
+      - name: Create Inno Setup Script
         run: |
-          cd apps/sayit_app/build/windows/runner/Release
-          Compress-Archive -Path * -DestinationPath SayIt_windows.zip
+          @"
+          [Setup]
+          AppName=SayIt
+          AppVersion=0.1
+          DefaultDirName={autopf}\SayIt
+          OutputDir=.
+          OutputBaseFilename=SayIt_setup
+          Compression=lzma2
+          [Files]
+          Source="apps\sayit_app\build\windows\runner\Release\*";DestDir="{app}";Flags:recursesubdirs
+          "@ | Out-File -Encoding UTF8 apps/sayit_app/build/windows/runner/Release/sayit.iss
+
+      - name: Build Installer
+        run: |
+          choco install innosetup -y
+          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" apps/sayit_app/build/windows/runner/Release/sayit.iss
 
       - name: Upload to Release
         if: github.event.inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
+          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_setup.exe --clobber
 
       - name: Upload to Release (release trigger)
         if: github.event.inputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
+          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_setup.exe --clobber
