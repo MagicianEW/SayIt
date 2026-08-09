@@ -4,6 +4,11 @@ on:
   release:
     types: [created]
   workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release tag'
+        required: false
+        type: string
 
 permissions:
   contents: write
@@ -22,9 +27,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          cache: true
-          cache-key: 'flutter-macos-arm64-stable-3.44.9'
-          cache-path: '/opt/hostedtoolcache/flutter/stable-3.44.9-arm64'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -56,6 +58,12 @@ jobs:
           zip -r SayIt_macos.zip SayIt.app
 
       - name: Upload to Release
+        if: github.event.inputs.tag != ''
+        run: |
+          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip --clobber
+
+      - name: Upload to Release (release trigger)
+        if: github.event.inputs.tag == ''
         run: |
           gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip --clobber
 
@@ -68,9 +76,6 @@ jobs:
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
-          cache: true
-          cache-key: 'flutter-windows-x64-stable-3.44.9'
-          cache-path: 'C:\hostedtoolcache\flutter\stable-3.44.9-x64'
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
@@ -96,5 +101,11 @@ jobs:
           Compress-Archive -Path * -DestinationPath SayIt_windows.zip
 
       - name: Upload to Release
+        if: github.event.inputs.tag != ''
+        run: |
+          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
+
+      - name: Upload to Release (release trigger)
+        if: github.event.inputs.tag == ''
         run: |
           gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
