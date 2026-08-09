@@ -107,35 +107,21 @@ jobs:
           mkdir -p apps/sayit_app/build/windows/runner/Release/bin
           cp sayit-poc/target/release/sayit-poc.exe apps/sayit_app/build/windows/runner/Release/bin/
 
-      - name: Create Inno Setup Script
+      - name: Create ZIP
         run: |
-          $lines = @(
-            "[Setup]",
-            "AppName=SayIt",
-            "AppVersion=0.1",
-            "DefaultDirName={autopf}\SayIt",
-            "OutputDir=.",
-            "OutputBaseFilename=SayIt_setup",
-            "Compression=lzma2",
-            "[Files]",
-            'Source="*";DestDir="{app}";Flags:recursesubdirs'
-          )
-          $lines | Out-File -FilePath "apps/sayit_app/build/windows/runner/Release/sayit.iss" -Encoding ASCII
-
-      - name: Build Installer
-        run: |
-          & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" apps/sayit_app/build/windows/runner/Release/sayit.iss
+          cd apps/sayit_app/build/windows/runner/Release
+          Compress-Archive -Path * -DestinationPath SayIt_windows.zip
 
       - name: Upload to Release
         if: github.event.inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_setup.exe --clobber
+          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
 
       - name: Upload to Release (release trigger)
         if: github.event.inputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_setup.exe --clobber
+          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
