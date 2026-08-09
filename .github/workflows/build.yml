@@ -28,26 +28,30 @@ jobs:
           cargo build --release
 
       - name: Install macOS dependencies
-        run: flutter precache --macos
+        run: |
+          cd apps/sayit_app
+          flutter precache --macos
 
       - name: Build macOS
-        run: flutter build macos --release
+        run: |
+          cd apps/sayit_app
+          flutter build macos --release
 
       - name: Copy Rust binary to app
         run: |
-          mkdir -p build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin
-          cp sayit-poc/target/release/sayit-poc build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/
-          chmod +x build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
+          mkdir -p apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin
+          cp sayit-poc/target/release/sayit-poc apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/
+          chmod +x apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
 
       - name: Create ZIP
         run: |
-          cd build/macos/Build/Products/Release
+          cd apps/sayit_app/build/macos/Build/Products/Release
           zip -r SayIt_macos.zip SayIt.app
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/macos/Build/Products/Release/SayIt_macos.zip
+          files: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
@@ -70,22 +74,23 @@ jobs:
           cargo build --release
 
       - name: Build Windows
-        run: flutter build windows --release
+        run: |
+          cd apps/sayit_app
+          flutter build windows --release
 
       - name: Copy Rust binary to app
         run: |
-          mkdir -p build/windows/runner/Release/data/flutter_assets
-          mkdir -p build/windows/runner/Release/bin
-          cp sayit-poc/target/release/sayit-poc.exe build/windows/runner/Release/bin/
+          mkdir -p apps/sayit_app/build/windows/runner/Release/bin
+          cp sayit-poc/target/release/sayit-poc.exe apps/sayit_app/build/windows/runner/Release/bin/
 
       - name: Create ZIP
         run: |
-          cd build/windows/runner/Release
+          cd apps/sayit_app/build/windows/runner/Release
           Compress-Archive -Path * -DestinationPath SayIt_windows.zip
 
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: build/windows/runner/Release/SayIt_windows.zip
+          files: apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
