@@ -62,7 +62,7 @@ jobs:
             --volname "SayIt" \
             --window-pos 200 120 \
             --hide-extension SayIt.app \
-            "SayIt.dmg" \
+            "SayIt_macos_${{ github.event.inputs.tag || github.event.release.tag_name }}.dmg" \
             "SayIt_dmg/"
 
       - name: Upload to Release
@@ -70,14 +70,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/macos/Build/Products/Release/SayIt.dmg --clobber
+          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${{ github.event.inputs.tag }}.dmg --clobber
 
       - name: Upload to Release (release trigger)
         if: github.event.inputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/macos/Build/Products/Release/SayIt.dmg --clobber
+          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${{ github.event.release.tag_name }}.dmg --clobber
 
   build-windows:
     runs-on: windows-latest
@@ -108,20 +108,22 @@ jobs:
           cp sayit-poc/target/release/sayit-poc.exe apps/sayit_app/build/windows/runner/Release/bin/
 
       - name: Create ZIP
+        shell: pwsh
         run: |
-          cd apps/sayit_app/build/windows/runner/Release
-          Compress-Archive -Path * -DestinationPath SayIt_windows.zip
+          $tag = if ('${{ github.event.inputs.tag }}' -ne '') { '${{ github.event.inputs.tag }}' } else { '${{ github.event.release.tag_name }}' }
+          $zipName = "SayIt_windows_$tag.zip"
+          Compress-Archive -Path * -DestinationPath $zipName
 
       - name: Upload to Release
         if: github.event.inputs.tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
+          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_windows_${{ github.event.inputs.tag }}.zip --clobber
 
       - name: Upload to Release (release trigger)
         if: github.event.inputs.tag == ''
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
+          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_windows_${{ github.event.release.tag_name }}.zip --clobber
