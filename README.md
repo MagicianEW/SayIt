@@ -15,8 +15,8 @@
 
 | 平台 | 状态 |
 |------|------|
-| Windows | ![Build](https://github.com/MagicianEW/SayIt/actions/workflows/windows-release.yml/badge.svg) |
-| macOS | ![Build](https://github.com/MagicianEW/SayIt/actions/workflows/macos-release.yml/badge.svg) |
+| Windows | ![Build](https://github.com/MagicianEW/SayIt/actions/workflows/build.yml/badge.svg) |
+| macOS | ![Build](https://github.com/MagicianEW/SayIt/actions/workflows/build.yml/badge.svg) |
 
 ## 技术栈
 
@@ -27,6 +27,32 @@
 ## 下载
 
 从 [Releases](https://github.com/MagicianEW/SayIt/releases) 页面下载最新版本。
+
+## macOS 安装说明
+
+⚠️ 当前 release 为**临时签名**（ad-hoc），未通过 Apple 公证。首次打开会提示"无法验证开发者"。
+
+**绕过 Gatekeeper 的方法（三选一）：**
+
+**方法 1：右键打开（推荐）**
+1. 在 Finder 中找到 `SayIt.app`
+2. **右键点击** → **打开**
+3. 弹出警告时再次点 **打开**
+
+**方法 2：终端命令**
+```bash
+# 移除下载 quarantine 属性
+xattr -dr com.apple.quarantine /Applications/SayIt.app
+
+# 或者允许任意来源（系统设置）
+sudo spctl --master-disable
+```
+
+**方法 3：移动到 Applications 后尝试**
+1. 拖动 `SayIt.app` 到 `/Applications/`
+2. 双击打开
+
+> 💡 正式发布需要 Apple Developer 账号（$99/年）进行签名 + 公证，本项目目前未配置。
 
 ## 协议
 

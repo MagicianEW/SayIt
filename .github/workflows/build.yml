@@ -51,6 +51,11 @@ jobs:
           mkdir -p apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin
           cp sayit-poc/target/release/sayit-poc apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/
           chmod +x apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
+          codesign --force --sign - apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
+
+      - name: Re-sign app
+        run: |
+          codesign --force --deep --sign - apps/sayit_app/build/macos/Build/Products/Release/SayIt.app
 
       - name: Create DMG
         run: |
