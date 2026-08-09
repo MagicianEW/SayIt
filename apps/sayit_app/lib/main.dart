@@ -396,19 +396,45 @@ class _SayItHomePageState extends State<SayItHomePage> {
         final content = await file.readAsString();
         final settings = jsonDecode(content) as Map<String, dynamic>;
 
+        final validLanguageCodes = languages.map((l) => l['code']!).toSet();
+        final validGenders = {'female', 'male'};
+        final validVoiceNames = voiceData.map((v) => v.name).toSet();
+
+        final importedVoice = settings['voice'] as String?;
+        final importedLanguage = settings['language'] as String?;
+        final importedGender = settings['gender'] as String?;
+        final importedSpeed = (settings['speed'] as num?)?.toDouble();
+        final importedPitch = (settings['pitch'] as num?)?.toDouble();
+        final importedVolume = (settings['volume'] as num?)?.toDouble();
+
+        if (!mounted) return;
         setState(() {
-          _selectedVoice = settings['voice'] as String? ?? _selectedVoice;
-          _selectedLanguage = settings['language'] as String? ?? _selectedLanguage;
-          _selectedGender = settings['gender'] as String? ?? _selectedGender;
-          _speed = (settings['speed'] as num?)?.toDouble() ?? _speed;
-          _pitch = (settings['pitch'] as num?)?.toDouble() ?? _pitch;
-          _volume = (settings['volume'] as num?)?.toDouble() ?? _volume;
+          if (importedVoice != null && validVoiceNames.contains(importedVoice)) {
+            _selectedVoice = importedVoice;
+            _selectedLanguage = importedLanguage != null && validLanguageCodes.contains(importedLanguage)
+                ? importedLanguage
+                : _selectedLanguage;
+            _selectedGender = importedGender != null && validGenders.contains(importedGender)
+                ? importedGender
+                : _selectedGender;
+          }
+          if (importedSpeed != null && importedSpeed >= 0.5 && importedSpeed <= 2.0) {
+            _speed = importedSpeed;
+          }
+          if (importedPitch != null && importedPitch >= -1.0 && importedPitch <= 1.0) {
+            _pitch = importedPitch;
+          }
+          if (importedVolume != null && importedVolume >= 0.0 && importedVolume <= 2.0) {
+            _volume = importedVolume;
+          }
         });
 
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(content: Text('设定已导入')),
         );
       } catch (e) {
+        if (!mounted) return;
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text('导入失败: $e')),
         );
