@@ -1,9 +1,8 @@
 name: Release Builds
 
 on:
-  push:
-    tags:
-      - 'v*'
+  release:
+    types: [created]
 
 env:
   RUST_BACKTRACE: 1
@@ -52,8 +51,6 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-windows:
     runs-on: windows-latest
@@ -92,5 +89,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
