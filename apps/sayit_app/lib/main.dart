@@ -178,8 +178,16 @@ class _SayItHomePageState extends State<SayItHomePage> {
   }
 
   Future<SynthesisResult> _synthesizeText(String text, String voice, double speed, double pitch, double volume) async {
-    final appDir = File(Platform.resolvedExecutable).parent.parent;
-    final pocBinary = '${appDir.path}/Resources/bin/sayit-poc';
+    String pocBinary;
+    if (Platform.isMacOS) {
+      final appDir = File(Platform.resolvedExecutable).parent.parent;
+      pocBinary = '${appDir.path}/Resources/bin/sayit-poc';
+    } else if (Platform.isWindows) {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      pocBinary = '$exeDir/bin/sayit-poc.exe';
+    } else {
+      throw Exception('Unsupported platform: ${Platform.operatingSystem}');
+    }
     final processedText = TextSegmenter.preprocessText(text);
     final ratePercent = ((speed - 1.0) * 100).round();
     final rate = ratePercent >= 0 ? '+$ratePercent%' : '$ratePercent%';
