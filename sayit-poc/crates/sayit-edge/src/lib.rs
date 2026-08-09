@@ -228,11 +228,10 @@ impl EdgeClient {
             return Err(EdgeError::NonZeroExitWithMessage(combined));
         }
 
-        let (sample_rate, format) = if req.config.output_format.starts_with("raw-") {
-            (16_000, "pcm")
-        } else {
-            (24_000, "mp3")
-        };
+        // edge_tts v7 的 Communicate.stream() 默认返回 MP3 (audio/mpeg, 24kHz)
+        // output_format 参数在 Python 端未被使用，保留用于将来可能的 PCM 支持
+        let sample_rate = 24_000;
+        let format = "mp3";
 
         Ok(SynthesizeResult {
             audio,
