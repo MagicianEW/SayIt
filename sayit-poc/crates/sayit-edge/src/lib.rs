@@ -77,7 +77,7 @@ impl Default for EdgeConfig {
     fn default() -> Self {
         Self {
             voice: "zh-CN-XiaoxiaoNeural".to_string(),
-            output_format: "audio-24khz-48kbitrate-mono-mp3".to_string(),
+            output_format: "raw-16khz-16bit-mono-pcm".to_string(),
             pitch: "+0Hz".to_string(),
             rate: "+0%".to_string(),
             volume: "+0%".to_string(),

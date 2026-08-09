@@ -95,6 +95,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
   final _audioPlayer = AudioPlayer();
 
   List<Sentence> _sentences = [];
+  List<int> _sentenceAudioOffsetsMs = [];
   int _currentSentenceIndex = -1;
   bool _isGenerating = false;
   String? _statusMessage;
@@ -127,8 +128,21 @@ class _SayItHomePageState extends State<SayItHomePage> {
       }
     });
     _audioPlayer.positionStream.listen((position) {
+      final posMs = position.inMilliseconds;
+      int sentenceIndex = 0;
+      for (int i = 0; i < _sentenceAudioOffsetsMs.length; i++) {
+        final offset = _sentenceAudioOffsetsMs[i];
+        final end = i < _sentenceAudioOffsetsMs.length - 1
+            ? _sentenceAudioOffsetsMs[i + 1]
+            : double.infinity;
+        if (posMs >= offset && posMs < end) {
+          sentenceIndex = i;
+          break;
+        }
+      }
       setState(() {
         _currentPosition = position;
+        _currentSentenceIndex = sentenceIndex;
       });
     });
     _audioPlayer.durationStream.listen((duration) {
@@ -164,7 +178,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
   }
 
   Future<SynthesisResult> _synthesizeText(String text, String voice, double speed, double pitch, double volume) async {
-    final pocBinary = Platform.environment['SAYIT_POC_BINARY'] ?? '../../sayit-poc/target/debug/sayit-poc';
+    final appDir = File(Platform.resolvedExecutable).parent.parent;
+    final pocBinary = '${appDir.path}/Resources/bin/sayit-poc';
     final processedText = TextSegmenter.preprocessText(text);
     final ratePercent = ((speed - 1.0) * 100).round();
     final rate = ratePercent >= 0 ? '+$ratePercent%' : '$ratePercent%';
@@ -227,6 +242,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
     try {
       final audioChunks = <Uint8List>[];
+      final allBoundaries = <List<WordBoundary>>[];
 
       for (int i = 0; i < _sentences.length; i++) {
         setState(() {
@@ -236,17 +252,27 @@ class _SayItHomePageState extends State<SayItHomePage> {
         final sentence = _sentences[i];
         final result = await _synthesizeText(sentence.text, _selectedVoice, _speed, _pitch, _volume);
         audioChunks.add(result.audio);
+        allBoundaries.add(result.boundaries);
+      }
 
-        if (sentence.breakTimeMs > 0 && i < _sentences.length - 1) {
-          final silence = WavConcat.createSilence(sentence.breakTimeMs);
-          audioChunks.add(silence);
+      _sentenceAudioOffsetsMs = [];
+      int offsetMs = 0;
+      for (int i = 0; i < allBoundaries.length; i++) {
+        _sentenceAudioOffsetsMs.add(offsetMs);
+        final boundaries = allBoundaries[i];
+        if (boundaries.isNotEmpty) {
+          final last = boundaries.last;
+          offsetMs += (last.audioOffsetMs + last.durationMs).round();
         }
       }
 
-      final combined = WavConcat.concatenate(audioChunks);
+      final combined = <int>[];
+      for (final chunk in audioChunks) {
+        combined.addAll(chunk);
+      }
 
       await _audioPlayer.setAudioSource(
-        _AudioSourceFromBytes(combined),
+        _AudioSourceFromBytes(Uint8List.fromList(combined)),
       );
 
       setState(() {
@@ -399,6 +425,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
             Text('许可证: GPL-3.0-or-later'),
             SizedBox(height: 8),
             Text('本软件遵循 GPL-3.0-or-later 协议开源。'),
+            SizedBox(height: 16),
+            Text('项目页面: https://github.com/MagicianEW/SayIt'),
           ],
         ),
         actions: [
@@ -444,197 +472,204 @@ class _SayItHomePageState extends State<SayItHomePage> {
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
-              controller: _textController,
-              maxLines: 5,
-              decoration: const InputDecoration(
-                border: OutlineInputBorder(),
-                labelText: '输入文本',
-                hintText: '在此输入或粘贴文本...',
-              ),
-            ),
-            const SizedBox(height: 16),
-            Row(
-              children: [
-                ElevatedButton.icon(
-                  onPressed: _segmentText,
-                  icon: const Icon(Icons.segment),
-                  label: const Text('分句'),
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _isGenerating ? null : _generateAndPlay,
-                  icon: const Icon(Icons.play_arrow),
-                  label: const Text('生成并播放'),
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  onPressed: _isGenerating ? null : _togglePause,
-                  icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-                  tooltip: _isPlaying ? '暂停' : '继续',
-                ),
-                const SizedBox(width: 8),
-                IconButton(
-                  onPressed: (_isPlaying || _totalDuration.inMilliseconds > 0) ? () => _audioPlayer.stop() : null,
-                  icon: const Icon(Icons.stop),
-                  tooltip: '停止',
-                ),
-                const SizedBox(width: 8),
-                ElevatedButton.icon(
-                  onPressed: _isGenerating ? null : _exportWav,
-                  icon: const Icon(Icons.save_alt),
-                  label: const Text('导出WAV'),
-                ),
-                const Spacer(),
-                DropdownButton<String>(
-                  value: _selectedLanguage,
-                  items: languages.map((l) => DropdownMenuItem(
-                    value: l['code'],
-                    child: Text(l['name']!, style: const TextStyle(fontSize: 12)),
-                  )).toList(),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() {
-                        _selectedLanguage = value;
-                        final filtered = _filteredVoices;
-                        if (filtered.isNotEmpty) {
-                          _selectedVoice = filtered.first.value;
-                        }
-                      });
-                    }
-                  },
-                ),
-                const SizedBox(width: 4),
-                DropdownButton<String>(
-                  value: _selectedGender,
-                  items: genders.map((g) => DropdownMenuItem(
-                    value: g['code'],
-                    child: Text(g['name']!, style: const TextStyle(fontSize: 12)),
-                  )).toList(),
-                  onChanged: (value) {
-                    if (value != null) {
-                      setState(() {
-                        _selectedGender = value;
-                        final filtered = _filteredVoices;
-                        if (filtered.isNotEmpty) {
-                          _selectedVoice = filtered.first.value;
-                        }
-                      });
-                    }
-                  },
-                ),
-                const SizedBox(width: 4),
-                Flexible(
-                  child: DropdownButton<String>(
-                    value: _selectedVoice,
-                    isExpanded: true,
-                    items: _filteredVoices.map((v) => DropdownMenuItem(
-                      value: v.value,
-                      child: Text(v.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                    )).toList(),
-                    onChanged: (value) {
-                      if (value != null) {
-                        setState(() => _selectedVoice = value);
-                      }
-                    },
+            SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  TextField(
+                    controller: _textController,
+                    maxLines: 5,
+                    decoration: const InputDecoration(
+                      border: OutlineInputBorder(),
+                      labelText: '输入文本',
+                      hintText: '在此输入或粘贴文本...',
+                    ),
                   ),
-                ),
-              ],
-            ),
-            if (_isPlaying || _totalDuration.inMilliseconds > 0)
-              Padding(
-                padding: const EdgeInsets.symmetric(vertical: 8),
-                child: Row(
-                  children: [
-                    Text(_formatDuration(_currentPosition)),
-                    Expanded(
-                      child: Slider(
-                        value: _totalDuration.inMilliseconds > 0
-                            ? _currentPosition.inMilliseconds.toDouble()
-                            : 0,
-                        min: 0,
-                        max: _totalDuration.inMilliseconds > 0
-                            ? _totalDuration.inMilliseconds.toDouble()
-                            : 1,
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: _segmentText,
+                        icon: const Icon(Icons.segment),
+                        label: const Text('分句'),
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: _isGenerating ? null : _generateAndPlay,
+                        icon: const Icon(Icons.play_arrow),
+                        label: const Text('生成并播放'),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: _isGenerating ? null : _togglePause,
+                        icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                        tooltip: _isPlaying ? '暂停' : '继续',
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton(
+                        onPressed: (_isPlaying || _totalDuration.inMilliseconds > 0) ? () => _audioPlayer.stop() : null,
+                        icon: const Icon(Icons.stop),
+                        tooltip: '停止',
+                      ),
+                      const SizedBox(width: 8),
+                      ElevatedButton.icon(
+                        onPressed: _isGenerating ? null : _exportWav,
+                        icon: const Icon(Icons.save_alt),
+                        label: const Text('导出'),
+                      ),
+                      const Spacer(),
+                      DropdownButton<String>(
+                        value: _selectedLanguage,
+                        items: languages.map((l) => DropdownMenuItem(
+                          value: l['code'],
+                          child: Text(l['name']!, style: const TextStyle(fontSize: 12)),
+                        )).toList(),
                         onChanged: (value) {
-                          _audioPlayer.seek(Duration(milliseconds: value.round()));
+                          if (value != null) {
+                            setState(() {
+                              _selectedLanguage = value;
+                              final filtered = _filteredVoices;
+                              if (filtered.isNotEmpty) {
+                                _selectedVoice = filtered.first.value;
+                              }
+                            });
+                          }
                         },
                       ),
+                      const SizedBox(width: 4),
+                      DropdownButton<String>(
+                        value: _selectedGender,
+                        items: genders.map((g) => DropdownMenuItem(
+                          value: g['code'],
+                          child: Text(g['name']!, style: const TextStyle(fontSize: 12)),
+                        )).toList(),
+                        onChanged: (value) {
+                          if (value != null) {
+                            setState(() {
+                              _selectedGender = value;
+                              final filtered = _filteredVoices;
+                              if (filtered.isNotEmpty) {
+                                _selectedVoice = filtered.first.value;
+                              }
+                            });
+                          }
+                        },
+                      ),
+                      const SizedBox(width: 4),
+                      Flexible(
+                        child: DropdownButton<String>(
+                          value: _selectedVoice,
+                          isExpanded: true,
+                          items: _filteredVoices.map((v) => DropdownMenuItem(
+                            value: v.value,
+                            child: Text(v.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
+                          )).toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() => _selectedVoice = value);
+                            }
+                          },
+                        ),
+                      ),
+                    ],
+                  ),
+                  if (_isPlaying || _totalDuration.inMilliseconds > 0)
+                    Padding(
+                      padding: const EdgeInsets.symmetric(vertical: 8),
+                      child: Row(
+                        children: [
+                          Text(_formatDuration(_currentPosition)),
+                          Expanded(
+                            child: Slider(
+                              value: _totalDuration.inMilliseconds > 0
+                                  ? _currentPosition.inMilliseconds.toDouble()
+                                  : 0,
+                              min: 0,
+                              max: _totalDuration.inMilliseconds > 0
+                                  ? _totalDuration.inMilliseconds.toDouble()
+                                  : 1,
+                              onChanged: (value) {
+                                _audioPlayer.seek(Duration(milliseconds: value.round()));
+                              },
+                            ),
+                          ),
+                          Text(_formatDuration(_totalDuration)),
+                        ],
+                      ),
                     ),
-                    Text(_formatDuration(_totalDuration)),
-                  ],
-                ),
+                  const SizedBox(height: 8),
+                  Row(
+                    children: [
+                      const Text('语速'),
+                      Expanded(
+                        child: Slider(
+                          value: _speed,
+                          min: 0.5,
+                          max: 2.0,
+                          divisions: 15,
+                          label: '${(_speed * 100).round()}%',
+                          onChanged: (value) {
+                            setState(() {
+                              _speed = value;
+                            });
+                          },
+                        ),
+                      ),
+                      Text('${(_speed * 100).round()}%'),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const Text('音高'),
+                      Expanded(
+                        child: Slider(
+                          value: _pitch,
+                          min: -1.0,
+                          max: 1.0,
+                          divisions: 20,
+                          label: _pitch >= 0 ? '+${(_pitch * 50).round()}Hz' : '${(_pitch * 50).round()}Hz',
+                          onChanged: (value) {
+                            setState(() {
+                              _pitch = value;
+                            });
+                          },
+                        ),
+                      ),
+                      Text(_pitch >= 0 ? '+${(_pitch * 50).round()}Hz' : '${(_pitch * 50).round()}Hz'),
+                    ],
+                  ),
+                  Row(
+                    children: [
+                      const Text('音量'),
+                      Expanded(
+                        child: Slider(
+                          value: _volume,
+                          min: 0.0,
+                          max: 2.0,
+                          divisions: 20,
+                          label: '${(_volume * 100).round()}%',
+                          onChanged: (value) {
+                            setState(() {
+                              _volume = value;
+                            });
+                          },
+                        ),
+                      ),
+                      Text('${(_volume * 100).round()}%'),
+                    ],
+                  ),
+                  if (_statusMessage != null)
+                    Container(
+                      padding: const EdgeInsets.all(8),
+                      decoration: BoxDecoration(
+                        color: Colors.grey[200],
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: SelectableText(_statusMessage!),
+                    ),
+                ],
               ),
-            const SizedBox(height: 8),
-            Row(
-              children: [
-                const Text('语速'),
-                Expanded(
-                  child: Slider(
-                    value: _speed,
-                    min: 0.5,
-                    max: 2.0,
-                    divisions: 15,
-                    label: '${(_speed * 100).round()}%',
-                    onChanged: (value) {
-                      setState(() {
-                        _speed = value;
-                      });
-                    },
-                  ),
-                ),
-                Text('${(_speed * 100).round()}%'),
-              ],
             ),
-            Row(
-              children: [
-                const Text('音高'),
-                Expanded(
-                  child: Slider(
-                    value: _pitch,
-                    min: -1.0,
-                    max: 1.0,
-                    divisions: 20,
-                    label: _pitch >= 0 ? '+${(_pitch * 50).round()}Hz' : '${(_pitch * 50).round()}Hz',
-                    onChanged: (value) {
-                      setState(() {
-                        _pitch = value;
-                      });
-                    },
-                  ),
-                ),
-                Text(_pitch >= 0 ? '+${(_pitch * 50).round()}Hz' : '${(_pitch * 50).round()}Hz'),
-              ],
-            ),
-            Row(
-              children: [
-                const Text('音量'),
-                Expanded(
-                  child: Slider(
-                    value: _volume,
-                    min: 0.0,
-                    max: 2.0,
-                    divisions: 20,
-                    label: '${(_volume * 100).round()}%',
-                    onChanged: (value) {
-                      setState(() {
-                        _volume = value;
-                      });
-                    },
-                  ),
-                ),
-                Text('${(_volume * 100).round()}%'),
-              ],
-            ),
-            if (_statusMessage != null)
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: Colors.grey[200],
-                  borderRadius: BorderRadius.circular(4),
-                ),
-                child: Text(_statusMessage!),
-              ),
             const SizedBox(height: 16),
             if (_sentences.isNotEmpty)
               Expanded(
@@ -739,7 +774,7 @@ class _AudioSourceFromBytes extends StreamAudioSource {
       contentLength: end - start,
       offset: start,
       stream: Stream.value(_bytes.sublist(start, end)),
-      contentType: 'audio/wav',
+      contentType: 'audio/mpeg',
     );
   }
 }

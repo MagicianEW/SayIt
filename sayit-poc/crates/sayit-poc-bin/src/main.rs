@@ -32,7 +32,7 @@ struct Cli {
     voice: String,
 
     /// 输出格式（raw-16khz-16bit-mono-pcm 或 audio-24khz-48kbitrate-mono-mp3）
-    #[arg(long, default_value = "audio-24khz-48kbitrate-mono-mp3")]
+    #[arg(long, default_value = "raw-16khz-16bit-mono-pcm")]
     output_format: String,
 
     /// 语速（默认 +0%，范围 -100% 到 +100%，负数为减速，正数为加速）

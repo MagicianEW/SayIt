@@ -223,7 +223,7 @@
 			packageProductDependencies = (
 				78A3181F2AECB46A00862997 /* FlutterGeneratedPluginSwiftPackage */,
 			);
-			productName = Runner;
+			productName = SayIt;
 			productReference = 33CC10ED2044A3C60003C045 /* sayit_app.app */;
 			productType = "com.apple.product-type.application";
 		};

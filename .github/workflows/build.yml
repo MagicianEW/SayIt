@@ -1,9 +1,12 @@
-name: Build Releases
+name: Release Builds
 
 on:
   push:
     tags:
       - 'v*'
+
+env:
+  RUST_BACKTRACE: 1
 
 jobs:
   build-macos:
@@ -16,24 +19,39 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          version: stable
+
+      - name: Build Rust binary
+        run: |
+          cd sayit-poc
+          cargo build --release
+
       - name: Install macOS dependencies
         run: flutter precache --macos
 
       - name: Build macOS
         run: flutter build macos --release
 
+      - name: Copy Rust binary to app
+        run: |
+          mkdir -p build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin
+          cp sayit-poc/target/release/sayit-poc build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/
+          chmod +x build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
+
       - name: Create ZIP
         run: |
           cd build/macos/Build/Products/Release
-          zip -r sayit_app_macos.zip sayit_app.app
+          zip -r SayIt_macos.zip SayIt.app
 
-      - name: Upload macOS artifact
-        uses: actions/upload-release-asset@v1
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: build/macos/Build/Products/Release/sayit_app_macos.zip
-          asset_name: sayit_app_macos.zip
-          asset_content_type: application/zip
+          files: build/macos/Build/Products/Release/SayIt_macos.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
   build-windows:
     runs-on: windows-latest
@@ -45,18 +63,33 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: Setup Rust
+        uses: dtolnay/rust-action@stable
+        with:
+          version: stable
+
+      - name: Build Rust binary
+        run: |
+          cd sayit-poc
+          cargo build --release
+
       - name: Build Windows
         run: flutter build windows --release
+
+      - name: Copy Rust binary to app
+        run: |
+          mkdir -p build/windows/runner/Release/data/flutter_assets
+          mkdir -p build/windows/runner/Release/bin
+          cp sayit-poc/target/release/sayit-poc.exe build/windows/runner/Release/bin/
 
       - name: Create ZIP
         run: |
           cd build/windows/runner/Release
-          Compress-Archive -Path * -DestinationPath sayit_app_windows.zip
+          Compress-Archive -Path * -DestinationPath SayIt_windows.zip
 
-      - name: Upload Windows artifact
-        uses: actions/upload-release-asset@v1
+      - name: Upload to Release
+        uses: softprops/action-gh-release@v2
         with:
-          upload_url: ${{ github.event.release.upload_url }}
-          asset_path: build/windows/runner/Release/sayit_app_windows.zip
-          asset_name: sayit_app_windows.zip
-          asset_content_type: application/zip
+          files: build/windows/runner/Release/SayIt_windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
