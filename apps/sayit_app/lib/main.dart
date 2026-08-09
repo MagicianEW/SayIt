@@ -188,6 +188,10 @@ class _SayItHomePageState extends State<SayItHomePage> {
   }
 
   Future<void> _scanVoices() async {
+    setState(() {
+      _statusMessage = '正在扫描可用语音...';
+    });
+
     String pocBinary;
     if (Platform.isMacOS) {
       final appDir = File(Platform.resolvedExecutable).parent.parent;
@@ -210,20 +214,24 @@ class _SayItHomePageState extends State<SayItHomePage> {
           _availableVoices = available;
           _isScanningVoices = false;
           if (!_availableVoices.contains(_selectedVoice)) {
-            final filtered = _filteredVoices;
+            final filtered = voiceData.where((v) =>
+              v.languageCode == _selectedLanguage && v.gender == _selectedGender
+            ).where((v) => available.contains(v.value)
+            ).toList();
             if (filtered.isNotEmpty) {
               _selectedVoice = filtered.first.value;
             }
           }
+          _statusMessage = '已扫描 ${_availableVoices.length} 个可用语音';
         });
       }
     } catch (e) {
-      // Ignore errors, use all voices
+      if (!mounted) return;
+      setState(() {
+        _isScanningVoices = false;
+        _statusMessage = '语音扫描失败';
+      });
     }
-    if (!mounted) return;
-    setState(() {
-      _isScanningVoices = false;
-    });
   }
 
   Future<SynthesisResult> _synthesizeText(String text, String voice, double speed, double pitch, double volume) async {
@@ -514,7 +522,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('版本: v0.1'),
+            Text('版本: v0.1.1'),
             SizedBox(height: 8),
             Text('开发者: MagicianEW'),
             SizedBox(height: 16),
