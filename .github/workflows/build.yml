@@ -108,11 +108,14 @@ jobs:
           cp sayit-poc/target/release/sayit-poc.exe apps/sayit_app/build/windows/runner/Release/bin/
 
       - name: Create ZIP
-        shell: pwsh
         run: |
-          $tag = if ('${{ github.event.inputs.tag }}' -ne '') { '${{ github.event.inputs.tag }}' } else { '${{ github.event.release.tag_name }}' }
-          $zipName = "SayIt_windows_$tag.zip"
-          Compress-Archive -Path * -DestinationPath $zipName
+          cd apps/sayit_app/build/windows/runner/Release
+          Compress-Archive -Path * -DestinationPath SayIt_windows.zip
+
+      - name: Rename ZIP
+        run: |
+          cd apps/sayit_app/build/windows/runner/Release
+          mv SayIt_windows.zip SayIt_windows_${{ github.event.inputs.tag || github.event.release.tag_name }}.zip
 
       - name: Upload to Release
         if: github.event.inputs.tag != ''
