@@ -157,7 +157,6 @@ class _SayItHomePageState extends State<SayItHomePage> {
   }
 
   @override
-  @override
   void dispose() {
     _playerStateSub?.cancel();
     _positionSub?.cancel();
