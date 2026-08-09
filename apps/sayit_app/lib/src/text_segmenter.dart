@@ -36,13 +36,19 @@ class Sentence {
 }
 
 class TextSegmenter {
-  static const _defaultEndPuncts = '。！？；';
+  static const _defaultEndPuncts = '。！？；,.!?;:';
 
   static const Map<String, int> _defaultBreakTimes = {
     '。': 500,
     '！': 500,
     '？': 500,
     '；': 300,
+    ',': 200,
+    '.': 200,
+    '!': 500,
+    '?': 500,
+    ';': 200,
+    ':': 200,
   };
 
   final String endPuncts;
