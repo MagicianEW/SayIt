@@ -23,11 +23,13 @@
 //! - v1.4 §3.4 文本预处理：保留中文标点
 
 use std::process::Stdio;
+use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
+use tokio::time::timeout;
 
 #[derive(Debug, Error)]
 pub enum EdgeError {
@@ -88,6 +90,9 @@ impl Default for EdgeConfig {
 /// 输出格式常量
 pub const OUTPUT_FORMAT_PCM_16K: &str = "raw-16khz-16bit-mono-pcm";
 pub const OUTPUT_FORMAT_MP3_24K_48K: &str = "audio-24khz-48kbitrate-mono-mp3";
+
+/// 合成超时时间（秒）
+const SYNTH_TIMEOUT_SECS: u64 = 60;
 
 /// 一次合成调用的完整返回。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -232,56 +237,74 @@ impl EdgeClient {
         let mut boundaries = Vec::<Boundary>::new();
         let mut first_error: Option<String> = None;
 
-        while let Some(line) = reader.next_line().await
-            .map_err(|e| EdgeError::StdoutRead(e.to_string()))?
-        {
-            if line.starts_with("AUDIO ") {
-                if let Some(b64) = line.strip_prefix("AUDIO ") {
-                    use base64::Engine;
-                    let bytes = base64::engine::general_purpose::STANDARD
-                        .decode(b64.trim())
-                        .map_err(|e| EdgeError::Protocol(format!("base64: {e}")))?;
-                    audio.extend_from_slice(&bytes);
-                }
-            } else if line.starts_with("META ") {
-                if let Some(json) = line.strip_prefix("META ") {
-                    let meta: MetaFrame = serde_json::from_str(json)
-                        .map_err(|e| EdgeError::Protocol(format!("meta json: {e}")))?;
-                    if meta.kind == "WordBoundary" || meta.kind == "SentenceBoundary" {
-                        boundaries.push(Boundary {
-                            text_offset: 0,
-                            text_length: meta.length.unwrap_or(0),
-                            audio_offset_ms: (meta.offset as f64) / 10_000.0,
-                            duration_ms: (meta.duration as f64) / 10_000.0,
-                            text: meta.text,
-                            boundary_type: meta.kind,
-                        });
+        let read_task = async {
+            while let Some(line) = reader.next_line().await
+                .map_err(|e| EdgeError::StdoutRead(e.to_string()))?
+            {
+                if line.starts_with("AUDIO ") {
+                    if let Some(b64) = line.strip_prefix("AUDIO ") {
+                        use base64::Engine;
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(b64.trim())
+                            .map_err(|e| EdgeError::Protocol(format!("base64: {e}")))?;
+                        audio.extend_from_slice(&bytes);
                     }
+                } else if line.starts_with("META ") {
+                    if let Some(json) = line.strip_prefix("META ") {
+                        let meta: MetaFrame = serde_json::from_str(json)
+                            .map_err(|e| EdgeError::Protocol(format!("meta json: {e}")))?;
+                        if meta.kind == "WordBoundary" || meta.kind == "SentenceBoundary" {
+                            boundaries.push(Boundary {
+                                text_offset: 0,
+                                text_length: meta.length.unwrap_or(0),
+                                audio_offset_ms: (meta.offset as f64) / 10_000.0,
+                                duration_ms: (meta.duration as f64) / 10_000.0,
+                                text: meta.text,
+                                boundary_type: meta.kind,
+                            });
+                        }
+                    }
+                } else if line == "DONE" {
+                    break;
+                } else if line.starts_with("ERROR ") {
+                    first_error = Some(line.trim_start_matches("ERROR ").trim().to_string());
                 }
-            } else if line == "DONE" {
-                break;
-            } else if line.starts_with("ERROR ") {
-                first_error = Some(line.trim_start_matches("ERROR ").trim().to_string());
             }
+            Ok::<(), EdgeError>(())
+        };
+
+        let stderr_drain_task = async {
+            if let Some(mut s) = stderr {
+                let mut buf = String::new();
+                use tokio::io::AsyncReadExt;
+                let _ = s.read_to_string(&mut buf).await;
+            }
+        };
+
+        let (read_result, _, process_status) = tokio::join!(
+            timeout(Duration::from_secs(SYNTH_TIMEOUT_SECS), read_task),
+            stderr_drain_task,
+            child.wait()
+        );
+
+        let read_ok = read_result.is_ok();
+        if !read_ok {
+            let _ = child.kill().await;
+            return Err(EdgeError::StdoutRead("synthesis timed out".to_string()));
         }
 
-        let status = child.wait().await?;
+        read_result.map_err(|_| EdgeError::StdoutRead("synthesis timed out".to_string()))??;
+
+        let status = process_status?;
         if !status.success() {
-            let mut stderr_msg = String::new();
-            if let Some(mut s) = stderr {
-                use tokio::io::AsyncReadExt;
-                let _ = s.read_to_string(&mut stderr_msg).await;
-            }
             let combined = if let Some(err) = first_error {
-                format!("{} | stderr: {}", err, stderr_msg.trim())
+                err
             } else {
-                format!("exit={}, stderr: {}", status.code().unwrap_or(-1), stderr_msg.trim())
+                format!("exit={}", status.code().unwrap_or(-1))
             };
             return Err(EdgeError::NonZeroExitWithMessage(combined));
         }
 
-        // edge_tts v7 的 Communicate.stream() 默认返回 MP3 (audio/mpeg, 24kHz)
-        // output_format 参数在 Python 端未被使用，保留用于将来可能的 PCM 支持
         let sample_rate = 24_000;
         let format = "mp3";
 
