@@ -115,6 +115,15 @@ pub struct Boundary {
     pub boundary_type: String,
 }
 
+/// edge_tts 可用语音
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Voice {
+    pub name: String,
+    pub short_name: String,
+    pub gender: String,
+    pub locale: String,
+}
+
 /// Python 脚本输出元数据格式
 #[derive(Debug, Deserialize)]
 struct MetaFrame {
@@ -318,6 +327,48 @@ impl EdgeClient {
             boundaries,
         })
     }
+
+    /// 获取 edge_tts 所有可用语音列表。
+    pub async fn list_voices(&self) -> Result<Vec<Voice>, EdgeError> {
+        let script = PYTHON_LIST_VOICES_SCRIPT;
+
+        let mut child = Command::new(&self.python_path)
+            .arg("-c")
+            .arg(script)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+
+        let stdout = child.stdout.take().ok_or_else(|| {
+            EdgeError::StdoutRead("stdout not available".to_string())
+        })?;
+
+        let mut reader = BufReader::new(stdout).lines();
+        let mut voices = Vec::new();
+
+        while let Some(line) = reader.next_line().await
+            .map_err(|e| EdgeError::StdoutRead(e.to_string()))?
+        {
+            if line.starts_with("VOICE ") {
+                if let Some(json) = line.strip_prefix("VOICE ") {
+                    let voice: Voice = serde_json::from_str(json)
+                        .map_err(|e| EdgeError::Protocol(format!("voice json: {e}")))?;
+                    voices.push(voice);
+                }
+            } else if line.starts_with("ERROR ") {
+                let err = line.strip_prefix("ERROR ").unwrap_or(&line);
+                return Err(EdgeError::Remote(err.to_string()));
+            }
+        }
+
+        let status = child.wait().await?;
+        if !status.success() {
+            return Err(EdgeError::NonZeroExit(status.code().unwrap_or(-1)));
+        }
+
+        Ok(voices)
+    }
 }
 
 impl Default for EdgeClient {
@@ -353,6 +404,16 @@ pub fn synthesize_sync(
     let rt = tokio::runtime::Runtime::new()
         .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
     rt.block_on(client.synthesize(req))
+        .map_err(|e| e.to_string())
+}
+
+/// 同步封装：获取可用语音列表。
+#[flutter_rust_bridge::frb(sync)]
+pub fn list_voices_sync() -> Result<Vec<Voice>, String> {
+    let client = EdgeClient::new();
+    let rt = tokio::runtime::Runtime::new()
+        .map_err(|e| format!("Failed to create tokio runtime: {}", e))?;
+    rt.block_on(client.list_voices())
         .map_err(|e| e.to_string())
 }
 
@@ -416,6 +477,32 @@ async def main():
         sys.exit(1)
 
     print("DONE", flush=True)
+
+asyncio.run(main())
+"#;
+
+/// Python 脚本：获取 edge_tts 可用语音列表
+const PYTHON_LIST_VOICES_SCRIPT: &str = r#"
+import sys
+import asyncio
+import json
+import edge_tts
+
+async def main():
+    try:
+        voices = await edge_tts.list_voices()
+        for voice in voices:
+            v = {
+                "name": voice["Name"],
+                "short_name": voice.get("ShortName", ""),
+                "gender": voice.get("Gender", ""),
+                "locale": voice.get("Locale", ""),
+            }
+            sys.stdout.write("VOICE " + json.dumps(v, ensure_ascii=False) + "\n")
+            sys.stdout.flush()
+    except Exception as e:
+        print(f"ERROR {e}", flush=True)
+        sys.exit(1)
 
 asyncio.run(main())
 "#;

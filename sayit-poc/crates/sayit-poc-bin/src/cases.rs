@@ -368,3 +368,21 @@ pub async fn synthesize_text(opts: SynthOpts) -> anyhow::Result<SynthesisOutput>
         boundaries,
     })
 }
+
+/// 获取 edge_tts 所有可用语音列表。
+pub async fn list_voices() -> anyhow::Result<Vec<sayit_edge::Voice>> {
+    let python_path = std::env::var("SAYIT_PYTHON")
+        .unwrap_or_else(|_| {
+            let home = std::env::var("HOME").unwrap_or_default();
+            let venv_py = format!("{home}/.sayit-venv/bin/python3");
+            if std::path::Path::new(&venv_py).exists() {
+                venv_py
+            } else {
+                "python3".to_string()
+            }
+        });
+
+    let client = sayit_edge::EdgeClient::with_python_path(python_path);
+    let voices = client.list_voices().await?;
+    Ok(voices)
+}

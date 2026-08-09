@@ -27,6 +27,10 @@ struct Cli {
     #[arg(long, value_name = "TEXT")]
     synthesize_text: Option<String>,
 
+    /// 列出所有可用语音
+    #[arg(long)]
+    list_voices: bool,
+
     /// 语音（默认 zh-CN-XiaoxiaoNeural）
     #[arg(long, default_value = "zh-CN-XiaoxiaoNeural")]
     voice: String,
@@ -99,6 +103,13 @@ async fn main() -> anyhow::Result<()> {
         };
         let result = cases::synthesize_text(opts).await?;
         println!("{}", serde_json::to_string(&result)?);
+        return Ok(());
+    }
+
+    // 列出可用语音
+    if cli.list_voices {
+        let voices = cases::list_voices().await?;
+        println!("{}", serde_json::to_string(&voices)?);
         return Ok(());
     }
 

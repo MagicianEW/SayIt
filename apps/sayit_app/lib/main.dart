@@ -106,6 +106,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
   bool _isPlaying = false;
   Duration _currentPosition = Duration.zero;
   Duration _totalDuration = Duration.zero;
+  Set<String> _availableVoices = {};
 
   String _selectedVoice = 'zh-CN-XiaoxiaoNeural';
   String _selectedLanguage = 'zh-CN';
@@ -117,12 +118,14 @@ class _SayItHomePageState extends State<SayItHomePage> {
   List<VoiceInfo> get _filteredVoices {
     return voiceData.where((v) =>
       v.languageCode == _selectedLanguage && v.gender == _selectedGender
+    ).where((v) => _availableVoices.isEmpty || _availableVoices.contains(v.value)
     ).toList();
   }
 
   @override
   void initState() {
     super.initState();
+    _scanVoices();
     _playerStateSub = _audioPlayer.playerStateStream.listen((state) {
       if (!mounted) return;
       setState(() {
@@ -180,6 +183,40 @@ class _SayItHomePageState extends State<SayItHomePage> {
       _sentences = _segmenter.segment(text);
       _statusMessage = '分句完成：${_sentences.length} 句';
     });
+  }
+
+  Future<void> _scanVoices() async {
+    String pocBinary;
+    if (Platform.isMacOS) {
+      final appDir = File(Platform.resolvedExecutable).parent.parent;
+      pocBinary = '${appDir.path}/Resources/bin/sayit-poc';
+    } else if (Platform.isWindows) {
+      final exeDir = File(Platform.resolvedExecutable).parent.path;
+      pocBinary = '$exeDir/bin/sayit-poc.exe';
+    } else {
+      final appDir = File(Platform.resolvedExecutable).parent;
+      pocBinary = '${appDir.path}/sayit-poc';
+    }
+
+    try {
+      final result = await Process.run(pocBinary, ['--list-voices']);
+      if (result.exitCode == 0) {
+        final json = jsonDecode(result.stdout as String) as List;
+        final available = json.map((v) => v['short_name'] as String).toSet();
+        if (!mounted) return;
+        setState(() {
+          _availableVoices = available;
+          if (!_availableVoices.contains(_selectedVoice)) {
+            final filtered = _filteredVoices;
+            if (filtered.isNotEmpty) {
+              _selectedVoice = filtered.first.value;
+            }
+          }
+        });
+      }
+    } catch (e) {
+      // Ignore errors, use all voices
+    }
   }
 
   Future<SynthesisResult> _synthesizeText(String text, String voice, double speed, double pitch, double volume) async {
