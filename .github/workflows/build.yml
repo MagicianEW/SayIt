@@ -41,6 +41,11 @@ jobs:
           cd apps/sayit_app
           flutter precache --macos
 
+      - name: Run Flutter tests
+        run: |
+          cd apps/sayit_app
+          flutter test
+
       - name: Build macOS
         run: |
           cd apps/sayit_app
