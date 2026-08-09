@@ -11,6 +11,7 @@
 use std::path::PathBuf;
 
 use anyhow::Context;
+use base64::Engine;
 use clap::{Parser, ValueEnum};
 use serde::Serialize;
 
@@ -26,6 +27,10 @@ struct Cli {
     /// TTS 合成模式
     #[arg(long, value_name = "TEXT")]
     synthesize_text: Option<String>,
+
+    /// synthesize-text 的内容为 base64 编码
+    #[arg(long)]
+    ssml_base64: bool,
 
     /// 列出所有可用语音
     #[arg(long)]
@@ -93,6 +98,11 @@ async fn main() -> anyhow::Result<()> {
 
     // 合成模式：直接输出 JSON 到 stdout
     if let Some(text) = cli.synthesize_text {
+        let text = if cli.ssml_base64 {
+            String::from_utf8(base64::engine::general_purpose::STANDARD.decode(&text)?)?
+        } else {
+            text
+        };
         let opts = cases::SynthOpts {
             text,
             voice: cli.voice,

@@ -60,6 +60,17 @@ class TextSegmenter {
   }) : breakTimes = breakTimes ?? _defaultBreakTimes;
 
   List<Sentence> segment(String text) {
+    final emphasisPattern = RegExp(r'\[!(.+?)!\]');
+    final emphasisPlaceholders = <String, String>{};
+    int placeholderIndex = 0;
+
+    String workingText = text.replaceAllMapped(emphasisPattern, (m) {
+      final placeholder = '\x00EMP$placeholderIndex\x00';
+      emphasisPlaceholders[placeholder] = m.group(0)!;
+      placeholderIndex++;
+      return placeholder;
+    });
+
     final sentences = <Sentence>[];
     final punctSet = endPuncts.runes.toSet();
 
@@ -67,14 +78,17 @@ class TextSegmenter {
     int sentenceIndex = 0;
     int i = 0;
 
-    while (i < text.length) {
-      final code = text.runes.elementAt(i);
+    while (i < workingText.length) {
+      final code = workingText.runes.elementAt(i);
 
       if (punctSet.contains(code)) {
         final char = String.fromCharCode(code);
         final breakTime = breakTimes[char] ?? 300;
-        final sentenceText = text.substring(sentenceStart, i + 1).trim();
+        String sentenceText = workingText.substring(sentenceStart, i + 1).trim();
         if (sentenceText.isNotEmpty) {
+          for (final entry in emphasisPlaceholders.entries) {
+            sentenceText = sentenceText.replaceAll(entry.key, entry.value);
+          }
           sentences.add(Sentence(
             index: sentenceIndex++,
             text: sentenceText,
@@ -89,8 +103,11 @@ class TextSegmenter {
       i++;
     }
 
-    final remaining = text.substring(sentenceStart).trim();
+    String remaining = workingText.substring(sentenceStart).trim();
     if (remaining.isNotEmpty) {
+      for (final entry in emphasisPlaceholders.entries) {
+        remaining = remaining.replaceAll(entry.key, entry.value);
+      }
       sentences.add(Sentence(
         index: sentenceIndex,
         text: remaining,

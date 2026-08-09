@@ -115,13 +115,16 @@ class _SayItHomePageState extends State<SayItHomePage> {
   double _speed = 1.0;
   double _pitch = 0.0;
   double _volume = 1.0;
+  String? _exportPath;
 
   List<VoiceInfo> get _filteredVoices {
     if (_isScanningVoices) return [];
-    return voiceData.where((v) =>
-      v.languageCode == _selectedLanguage && v.gender == _selectedGender
-    ).where((v) => _availableVoices.isEmpty || _availableVoices.contains(v.value)
-    ).toList();
+    return voiceData
+        .where((v) =>
+            v.languageCode == _selectedLanguage && v.gender == _selectedGender)
+        .where((v) =>
+            _availableVoices.isEmpty || _availableVoices.contains(v.value))
+        .toList();
   }
 
   @override
@@ -214,10 +217,12 @@ class _SayItHomePageState extends State<SayItHomePage> {
           _availableVoices = available;
           _isScanningVoices = false;
           if (!_availableVoices.contains(_selectedVoice)) {
-            final filtered = voiceData.where((v) =>
-              v.languageCode == _selectedLanguage && v.gender == _selectedGender
-            ).where((v) => available.contains(v.value)
-            ).toList();
+            final filtered = voiceData
+                .where((v) =>
+                    v.languageCode == _selectedLanguage &&
+                    v.gender == _selectedGender)
+                .where((v) => available.contains(v.value))
+                .toList();
             if (filtered.isNotEmpty) {
               _selectedVoice = filtered.first.value;
             }
@@ -234,7 +239,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
     }
   }
 
-  Future<SynthesisResult> _synthesizeText(String text, String voice, double speed, double pitch, double volume) async {
+  Future<SynthesisResult> _synthesizeText(String text, String voice,
+      double speed, double pitch, double volume) async {
     String pocBinary;
     if (Platform.isMacOS) {
       final appDir = File(Platform.resolvedExecutable).parent.parent;
@@ -247,16 +253,25 @@ class _SayItHomePageState extends State<SayItHomePage> {
       pocBinary = '${appDir.path}/sayit-poc';
     }
     final processedText = TextSegmenter.preprocessText(text);
+    final encodedText = base64Encode(utf8.encode(processedText));
     final ratePercent = ((speed - 1.0) * 100).round();
     final rate = ratePercent >= 0 ? '+$ratePercent%' : '$ratePercent%';
     final pitchHz = (pitch * 50).round();
     final pitchStr = pitchHz >= 0 ? '+${pitchHz}Hz' : '${pitchHz}Hz';
     final volumePercent = ((volume - 1.0) * 100).round();
-    final volumeStr = volumePercent >= 0 ? '+$volumePercent%' : '$volumePercent%';
+    final volumeStr =
+        volumePercent >= 0 ? '+$volumePercent%' : '$volumePercent%';
 
     final result = await Process.run(
       pocBinary,
-      ['--synthesize-text=$processedText', '--voice=$voice', '--rate=$rate', '--pitch=$pitchStr', '--volume=$volumeStr'],
+      [
+        '--synthesize-text=$encodedText',
+        '--voice=$voice',
+        '--rate=$rate',
+        '--pitch=$pitchStr',
+        '--volume=$volumeStr',
+        '--ssml-base64',
+      ],
     );
 
     if (result.exitCode != 0) {
@@ -317,7 +332,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
         });
 
         final sentence = _sentences[i];
-        final result = await _synthesizeText(sentence.text, _selectedVoice, _speed, _pitch, _volume);
+        final result = await _synthesizeText(
+            sentence.text, _selectedVoice, _speed, _pitch, _volume);
         audioChunks.add(result.audio);
         allBoundaries.add(result.boundaries);
       }
@@ -390,7 +406,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
       for (final sentence in _sentences) {
         if (!mounted) return;
-        final result = await _synthesizeText(sentence.text, _selectedVoice, _speed, _pitch, _volume);
+        final result = await _synthesizeText(
+            sentence.text, _selectedVoice, _speed, _pitch, _volume);
         audioChunks.add(result.audio);
       }
 
@@ -401,16 +418,31 @@ class _SayItHomePageState extends State<SayItHomePage> {
         combined.addAll(chunk);
       }
 
-      final directory = await getApplicationDocumentsDirectory();
-      final timestamp = DateTime.now().millisecondsSinceEpoch;
-      final filePath = '${directory.path}/sayit_export_$timestamp.mp3';
+      final basePath = _exportPath ?? (await getApplicationDocumentsDirectory()).path;
+      final dir = Directory(basePath);
+      int nextNum = 1;
+      if (await dir.exists()) {
+        final files = await dir.list().toList();
+        final pattern = RegExp(r'^(\d+)_');
+        for (final file in files) {
+          if (file is File && file.path.endsWith('.mp3')) {
+            final name = file.path.split('/').last;
+            final match = pattern.firstMatch(name);
+            if (match != null) {
+              final num = int.tryParse(match.group(1)!);
+              if (num != null && num >= nextNum) {
+                nextNum = num + 1;
+              }
+            }
+          }
+        }
+      }
+
+      final firstText = _sentences.first.text;
+      final prefix = firstText.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').substring(0, firstText.length > 10 ? 10 : firstText.length);
+      final filePath = '$basePath/${nextNum}_$prefix.mp3';
 
       await File(filePath).writeAsBytes(Uint8List.fromList(combined));
-
-      if (!mounted) return;
-      setState(() {
-        _statusMessage = '已导出到: $filePath';
-      });
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -447,7 +479,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
         final validLanguageCodes = languages.map((l) => l['code']!).toSet();
         final validGenders = {'female', 'male'};
-        final validVoiceNames = voiceData.map((v) => v.name).toSet();
+        final validVoiceValues = voiceData.map((v) => v.value).toSet();
 
         final importedVoice = settings['voice'] as String?;
         final importedLanguage = settings['language'] as String?;
@@ -455,27 +487,75 @@ class _SayItHomePageState extends State<SayItHomePage> {
         final importedSpeed = (settings['speed'] as num?)?.toDouble();
         final importedPitch = (settings['pitch'] as num?)?.toDouble();
         final importedVolume = (settings['volume'] as num?)?.toDouble();
+        final importedExportPath = settings['exportPath'] as String?;
+
+        String? finalExportPath = importedExportPath;
+        if (importedExportPath != null) {
+          final dir = Directory(importedExportPath);
+          if (!await dir.exists()) {
+            final create = await showDialog<bool>(
+              context: context,
+              builder: (context) => AlertDialog(
+                title: const Text('文件夹不存在'),
+                content: Text('设定的保存位置 "$importedExportPath" 不存在。是否创建该文件夹？'),
+                actions: [
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, false),
+                    child: const Text('否'),
+                  ),
+                  TextButton(
+                    onPressed: () => Navigator.pop(context, true),
+                    child: const Text('是'),
+                  ),
+                ],
+              ),
+            );
+            if (create == true) {
+              await dir.create(recursive: true);
+              finalExportPath = importedExportPath;
+            } else {
+              final newPath = await FilePicker.platform.getDirectoryPath(
+                dialogTitle: '选择导出位置',
+              );
+              if (newPath != null) {
+                finalExportPath = newPath;
+              } else {
+                finalExportPath = null;
+              }
+            }
+          }
+        }
 
         if (!mounted) return;
         setState(() {
-          if (importedVoice != null && validVoiceNames.contains(importedVoice)) {
+          if (importedVoice != null &&
+              validVoiceValues.contains(importedVoice)) {
             _selectedVoice = importedVoice;
-            _selectedLanguage = importedLanguage != null && validLanguageCodes.contains(importedLanguage)
+            _selectedLanguage = importedLanguage != null &&
+                    validLanguageCodes.contains(importedLanguage)
                 ? importedLanguage
                 : _selectedLanguage;
-            _selectedGender = importedGender != null && validGenders.contains(importedGender)
-                ? importedGender
-                : _selectedGender;
+            _selectedGender =
+                importedGender != null && validGenders.contains(importedGender)
+                    ? importedGender
+                    : _selectedGender;
           }
-          if (importedSpeed != null && importedSpeed >= 0.5 && importedSpeed <= 2.0) {
+          if (importedSpeed != null &&
+              importedSpeed >= 0.5 &&
+              importedSpeed <= 2.0) {
             _speed = importedSpeed;
           }
-          if (importedPitch != null && importedPitch >= -1.0 && importedPitch <= 1.0) {
+          if (importedPitch != null &&
+              importedPitch >= -1.0 &&
+              importedPitch <= 1.0) {
             _pitch = importedPitch;
           }
-          if (importedVolume != null && importedVolume >= 0.0 && importedVolume <= 2.0) {
+          if (importedVolume != null &&
+              importedVolume >= 0.0 &&
+              importedVolume <= 2.0) {
             _volume = importedVolume;
           }
+          _exportPath = finalExportPath;
         });
 
         if (!mounted) return;
@@ -491,6 +571,17 @@ class _SayItHomePageState extends State<SayItHomePage> {
     }
   }
 
+  Future<void> _selectExportPath() async {
+    final result = await FilePicker.platform.getDirectoryPath(
+      dialogTitle: '选择导出位置',
+    );
+    if (result != null) {
+      setState(() {
+        _exportPath = result;
+      });
+    }
+  }
+
   Future<void> _exportSettings() async {
     final settings = {
       'voice': _selectedVoice,
@@ -499,17 +590,70 @@ class _SayItHomePageState extends State<SayItHomePage> {
       'speed': _speed,
       'pitch': _pitch,
       'volume': _volume,
+      'exportPath': _exportPath,
     };
 
-    final directory = await getApplicationDocumentsDirectory();
     final timestamp = DateTime.now().millisecondsSinceEpoch;
-    final filePath = '${directory.path}/sayit_settings_$timestamp.json';
+    final result = await FilePicker.platform.saveFile(
+      dialogTitle: '导出设定',
+      fileName: 'sayit_settings_$timestamp.json',
+      type: FileType.custom,
+      allowedExtensions: ['json'],
+    );
 
-    final file = File(filePath);
-    await file.writeAsString(jsonEncode(settings));
+    if (result != null) {
+      final file = File(result);
+      await file.writeAsString(jsonEncode(settings));
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('设定已导出: $result')),
+        );
+      }
+    }
+  }
 
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(content: Text('设定已导出: $filePath')),
+  void _showHelp() {
+    showDialog(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('使用帮助'),
+        content: const SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text('【文本输入】', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('在文本框中输入或粘贴要朗读的文字，点击"分句"进行分段。'),
+              SizedBox(height: 12),
+              Text('【语音设置】', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('顶部可选择语言、性别和具体语音。下方的滑块可调节语速、音高和音量。'),
+              SizedBox(height: 12),
+              Text('【播放控制】', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('点击"生成并播放"合成并播放语音。播放过程中可暂停、继续或停止。'),
+              SizedBox(height: 12),
+              Text('【导出音频】', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('点击文件夹图标设置导出位置，然后点击"导出"保存为 MP3 文件。'),
+              Text('文件名格式：序号_前10个字.mp3'),
+              SizedBox(height: 12),
+              Text('【文本强调】', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('选中文字后点击"强调选中"，可将词语用 [! !] 标记，播放时该词会重读。'),
+              Text('点击"预览"可查看转换后的 SSML 格式。'),
+              SizedBox(height: 12),
+              Text('【导入/导出设置】', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('可保存当前语音设置为 JSON 文件，或从文件恢复设置。'),
+              SizedBox(height: 12),
+              Text('【CLI 命令】', style: TextStyle(fontWeight: FontWeight.bold)),
+              Text('--list-voices：列出所有可用语音'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context),
+            child: const Text('关闭'),
+          ),
+        ],
+      ),
     );
   }
 
@@ -522,7 +666,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('版本: v0.1.1'),
+            Text('版本: v0.1.2'),
             SizedBox(height: 8),
             Text('开发者: MagicianEW'),
             SizedBox(height: 16),
@@ -565,6 +709,11 @@ class _SayItHomePageState extends State<SayItHomePage> {
             tooltip: '导出设定',
           ),
           IconButton(
+            icon: const Icon(Icons.help_outline),
+            onPressed: _showHelp,
+            tooltip: '帮助',
+          ),
+          IconButton(
             icon: const Icon(Icons.info_outline),
             onPressed: _showAbout,
             tooltip: '关于',
@@ -590,115 +739,148 @@ class _SayItHomePageState extends State<SayItHomePage> {
                     ),
                   ),
                   const SizedBox(height: 16),
-                  Row(
-                    children: [
-                      ElevatedButton.icon(
-                        onPressed: _segmentText,
-                        icon: const Icon(Icons.segment),
-                        label: const Text('分句'),
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: _isGenerating ? null : _generateAndPlay,
-                        icon: const Icon(Icons.play_arrow),
-                        label: const Text('生成并播放'),
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        onPressed: _isGenerating ? null : _togglePause,
-                        icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-                        tooltip: _isPlaying ? '暂停' : '继续',
-                      ),
-                      const SizedBox(width: 8),
-                      IconButton(
-                        onPressed: (_isPlaying || _totalDuration.inMilliseconds > 0) ? () => _audioPlayer.stop() : null,
-                        icon: const Icon(Icons.stop),
-                        tooltip: '停止',
-                      ),
-                      const SizedBox(width: 8),
-                      ElevatedButton.icon(
-                        onPressed: _isGenerating ? null : _exportAudio,
-                        icon: const Icon(Icons.save_alt),
-                        label: const Text('导出'),
-                      ),
-                      const Spacer(),
-                      DropdownButton<String>(
-                        value: _selectedLanguage,
-                        items: languages.map((l) => DropdownMenuItem(
-                          value: l['code'],
-                          child: Text(l['name']!, style: const TextStyle(fontSize: 12)),
-                        )).toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() {
-                              _selectedLanguage = value;
-                              final filtered = _filteredVoices;
-                              if (filtered.isNotEmpty) {
-                                _selectedVoice = filtered.first.value;
-                              }
-                            });
-                          }
-                        },
-                      ),
-                      const SizedBox(width: 4),
-                      DropdownButton<String>(
-                        value: _selectedGender,
-                        items: genders.map((g) => DropdownMenuItem(
-                          value: g['code'],
-                          child: Text(g['name']!, style: const TextStyle(fontSize: 12)),
-                        )).toList(),
-                        onChanged: (value) {
-                          if (value != null) {
-                            setState(() {
-                              _selectedGender = value;
-                              final filtered = _filteredVoices;
-                              if (filtered.isNotEmpty) {
-                                _selectedVoice = filtered.first.value;
-                              }
-                            });
-                          }
-                        },
-                      ),
-                      const SizedBox(width: 4),
-                      Flexible(
-                        child: DropdownButton<String>(
-                          value: _selectedVoice,
-                          isExpanded: true,
-                          items: _filteredVoices.map((v) => DropdownMenuItem(
-                            value: v.value,
-                            child: Text(v.name, overflow: TextOverflow.ellipsis, style: const TextStyle(fontSize: 12)),
-                          )).toList(),
+                  SingleChildScrollView(
+                    scrollDirection: Axis.horizontal,
+                    child: Row(
+                      children: [
+                        ElevatedButton.icon(
+                          onPressed: _segmentText,
+                          icon: const Icon(Icons.segment),
+                          label: const Text('分句'),
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _isGenerating ? null : _generateAndPlay,
+                          icon: const Icon(Icons.play_arrow),
+                          label: const Text('生成并播放'),
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: _isGenerating ? null : _togglePause,
+                          icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                          tooltip: _isPlaying ? '暂停' : '继续',
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed:
+                              (_isPlaying || _totalDuration.inMilliseconds > 0)
+                                  ? () => _audioPlayer.stop()
+                                  : null,
+                          icon: const Icon(Icons.stop),
+                          tooltip: '停止',
+                        ),
+                        const SizedBox(width: 8),
+                        IconButton(
+                          onPressed: _selectExportPath,
+                          icon: const Icon(Icons.folder_open),
+                          tooltip: '保存位置${_exportPath != null ? ' ($_exportPath)' : ''}',
+                        ),
+                        const SizedBox(width: 8),
+                        ElevatedButton.icon(
+                          onPressed: _isGenerating ? null : _exportAudio,
+                          icon: const Icon(Icons.save_alt),
+                          label: const Text('导出'),
+                        ),
+                        const SizedBox(width: 16),
+                        DropdownButton<String>(
+                          value: _selectedLanguage,
+                          items: languages
+                              .map((l) => DropdownMenuItem(
+                                    value: l['code'],
+                                    child: Text(l['name']!,
+                                        style: const TextStyle(fontSize: 12)),
+                                  ))
+                              .toList(),
                           onChanged: (value) {
                             if (value != null) {
-                              setState(() => _selectedVoice = value);
+                              setState(() {
+                                _selectedLanguage = value;
+                                final filtered = _filteredVoices;
+                                if (filtered.isNotEmpty) {
+                                  _selectedVoice = filtered.first.value;
+                                }
+                              });
                             }
                           },
                         ),
-                      ),
-                    ],
+                        const SizedBox(width: 4),
+                        DropdownButton<String>(
+                          value: _selectedGender,
+                          items: genders
+                              .map((g) => DropdownMenuItem(
+                                    value: g['code'],
+                                    child: Text(g['name']!,
+                                        style: const TextStyle(fontSize: 12)),
+                                  ))
+                              .toList(),
+                          onChanged: (value) {
+                            if (value != null) {
+                              setState(() {
+                                _selectedGender = value;
+                                final filtered = _filteredVoices;
+                                if (filtered.isNotEmpty) {
+                                  _selectedVoice = filtered.first.value;
+                                }
+                              });
+                            }
+                          },
+                        ),
+                        const SizedBox(width: 4),
+                        SizedBox(
+                          width: 180,
+                          child: DropdownButton<String>(
+                            value: _selectedVoice,
+                            isExpanded: true,
+                            items: _filteredVoices
+                                .map((v) => DropdownMenuItem(
+                                      value: v.value,
+                                      child: Text(v.name,
+                                          overflow: TextOverflow.ellipsis,
+                                          style: const TextStyle(fontSize: 12)),
+                                    ))
+                                .toList(),
+                            onChanged: (value) {
+                              if (value != null) {
+                                setState(() => _selectedVoice = value);
+                              }
+                            },
+                          ),
+                        ),
+                      ],
+                    ),
                   ),
                   if (_isPlaying || _totalDuration.inMilliseconds > 0)
                     Padding(
                       padding: const EdgeInsets.symmetric(vertical: 8),
-                      child: Row(
-                        children: [
-                          Text(_formatDuration(_currentPosition)),
-                          Expanded(
-                            child: Slider(
-                              value: _totalDuration.inMilliseconds > 0
-                                  ? _currentPosition.inMilliseconds.toDouble()
-                                  : 0,
-                              min: 0,
-                              max: _totalDuration.inMilliseconds > 0
-                                  ? _totalDuration.inMilliseconds.toDouble()
-                                  : 1,
-                              onChanged: (value) {
-                                _audioPlayer.seek(Duration(milliseconds: value.round()));
-                              },
+                      child: SizedBox(
+                        height: 40,
+                        child: Row(
+                          children: [
+                            SizedBox(
+                              width: 50,
+                              child: Text(_formatDuration(_currentPosition)),
                             ),
-                          ),
-                          Text(_formatDuration(_totalDuration)),
-                        ],
+                            Expanded(
+                              child: Slider(
+                                value: _totalDuration.inMilliseconds > 0
+                                    ? _currentPosition.inMilliseconds.toDouble()
+                                    : 0,
+                                min: 0,
+                                max: _totalDuration.inMilliseconds > 0
+                                    ? _totalDuration.inMilliseconds.toDouble()
+                                    : 1,
+                                onChanged: (value) {
+                                  _audioPlayer.seek(
+                                      Duration(milliseconds: value.round()));
+                                },
+                              ),
+                            ),
+                            SizedBox(
+                              width: 50,
+                              child: Text(_formatDuration(_totalDuration)),
+                            ),
+                          ],
+                        ),
                       ),
                     ),
                   const SizedBox(height: 8),
@@ -731,7 +913,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
                           min: -1.0,
                           max: 1.0,
                           divisions: 20,
-                          label: _pitch >= 0 ? '+${(_pitch * 50).round()}Hz' : '${(_pitch * 50).round()}Hz',
+                          label: _pitch >= 0
+                              ? '+${(_pitch * 50).round()}Hz'
+                              : '${(_pitch * 50).round()}Hz',
                           onChanged: (value) {
                             setState(() {
                               _pitch = value;
@@ -739,7 +923,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
                           },
                         ),
                       ),
-                      Text(_pitch >= 0 ? '+${(_pitch * 50).round()}Hz' : '${(_pitch * 50).round()}Hz'),
+                      Text(_pitch >= 0
+                          ? '+${(_pitch * 50).round()}Hz'
+                          : '${(_pitch * 50).round()}Hz'),
                     ],
                   ),
                   Row(
@@ -787,8 +973,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
                       onTap: () async {
                         setState(() => _currentSentenceIndex = index);
                         try {
-                          final result = await _synthesizeText(
-                              sentence.text, _selectedVoice, _speed, _pitch, _volume);
+                          final result = await _synthesizeText(sentence.text,
+                              _selectedVoice, _speed, _pitch, _volume);
                           await _audioPlayer.setAudioSource(
                             _AudioSourceFromBytes(result.audio),
                           );
@@ -820,9 +1006,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
                                 '${index + 1}',
                                 style: TextStyle(
                                   fontWeight: FontWeight.bold,
-                                  color: isActive
-                                      ? Colors.indigo
-                                      : Colors.grey,
+                                  color: isActive ? Colors.indigo : Colors.grey,
                                 ),
                               ),
                             ),
