@@ -15,6 +15,7 @@
 // You should have received a copy of the GNU General Public License
 // along with this program.  If not, see <https://www.gnu.org/licenses/>.
 
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'dart:typed_data';
@@ -94,6 +95,10 @@ class _SayItHomePageState extends State<SayItHomePage> {
   final _segmenter = const TextSegmenter();
   final _audioPlayer = AudioPlayer();
 
+  StreamSubscription<PlayerState>? _playerStateSub;
+  StreamSubscription<Duration>? _positionSub;
+  StreamSubscription<Duration?>? _durationSub;
+
   List<Sentence> _sentences = [];
   List<int> _sentenceAudioOffsetsMs = [];
   int _currentSentenceIndex = -1;
@@ -119,15 +124,14 @@ class _SayItHomePageState extends State<SayItHomePage> {
   @override
   void initState() {
     super.initState();
-    _audioPlayer.playerStateStream.listen((state) {
+    _playerStateSub = _audioPlayer.playerStateStream.listen((state) {
+      if (!mounted) return;
       setState(() {
         _isPlaying = state.playing;
       });
-      if (state.processingState == ProcessingState.completed) {
-        // 播放完成
-      }
     });
-    _audioPlayer.positionStream.listen((position) {
+    _positionSub = _audioPlayer.positionStream.listen((position) {
+      if (!mounted) return;
       final posMs = position.inMilliseconds;
       int sentenceIndex = 0;
       for (int i = 0; i < _sentenceAudioOffsetsMs.length; i++) {
@@ -145,17 +149,20 @@ class _SayItHomePageState extends State<SayItHomePage> {
         _currentSentenceIndex = sentenceIndex;
       });
     });
-    _audioPlayer.durationStream.listen((duration) {
-      if (duration != null) {
-        setState(() {
-          _totalDuration = duration;
-        });
-      }
+    _durationSub = _audioPlayer.durationStream.listen((duration) {
+      if (!mounted || duration == null) return;
+      setState(() {
+        _totalDuration = duration;
+      });
     });
   }
 
   @override
+  @override
   void dispose() {
+    _playerStateSub?.cancel();
+    _positionSub?.cancel();
+    _durationSub?.cancel();
     _textController.dispose();
     _audioPlayer.dispose();
     super.dispose();
@@ -253,6 +260,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
       final allBoundaries = <List<WordBoundary>>[];
 
       for (int i = 0; i < _sentences.length; i++) {
+        if (!mounted) return;
         setState(() {
           _statusMessage = '正在合成第 ${i + 1}/${_sentences.length} 句';
         });
@@ -262,6 +270,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
         audioChunks.add(result.audio);
         allBoundaries.add(result.boundaries);
       }
+
+      if (!mounted) return;
 
       _sentenceAudioOffsetsMs = [];
       int offsetMs = 0;
@@ -279,10 +289,13 @@ class _SayItHomePageState extends State<SayItHomePage> {
         combined.addAll(chunk);
       }
 
+      if (!mounted) return;
+
       await _audioPlayer.setAudioSource(
         _AudioSourceFromBytes(Uint8List.fromList(combined)),
       );
 
+      if (!mounted) return;
       setState(() {
         _currentSentenceIndex = 0;
         _statusMessage = '播放中';
@@ -290,10 +303,12 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
       await _audioPlayer.play();
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _statusMessage = '错误：$e';
       });
     } finally {
+      if (!mounted) return;
       setState(() {
         _isGenerating = false;
       });
@@ -314,6 +329,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
       if (_sentences.isEmpty) return;
     }
 
+    if (!mounted) return;
     setState(() {
       _statusMessage = '正在导出...';
     });
@@ -322,6 +338,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
       final audioChunks = <Uint8List>[];
 
       for (final sentence in _sentences) {
+        if (!mounted) return;
         final result = await _synthesizeText(sentence.text, _selectedVoice, _speed, _pitch, _volume);
         audioChunks.add(result.audio);
 
@@ -331,6 +348,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
         }
       }
 
+      if (!mounted) return;
+
       final combined = WavConcat.concatenate(audioChunks);
 
       final directory = await getApplicationDocumentsDirectory();
@@ -339,10 +358,12 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
       await File(filePath).writeAsBytes(combined);
 
+      if (!mounted) return;
       setState(() {
         _statusMessage = '已导出到: $filePath';
       });
     } catch (e) {
+      if (!mounted) return;
       setState(() {
         _statusMessage = '导出错误：$e';
       });
