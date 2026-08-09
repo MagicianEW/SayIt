@@ -26,7 +26,6 @@ import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 
 import 'src/text_segmenter.dart';
-import 'src/wav_concat.dart';
 import 'src/voice_data.dart';
 
 void main() {
@@ -193,7 +192,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
       final exeDir = File(Platform.resolvedExecutable).parent.path;
       pocBinary = '$exeDir/bin/sayit-poc.exe';
     } else {
-      throw Exception('Unsupported platform: ${Platform.operatingSystem}');
+      final appDir = File(Platform.resolvedExecutable).parent;
+      pocBinary = '${appDir.path}/sayit-poc';
     }
     final processedText = TextSegmenter.preprocessText(text);
     final ratePercent = ((speed - 1.0) * 100).round();

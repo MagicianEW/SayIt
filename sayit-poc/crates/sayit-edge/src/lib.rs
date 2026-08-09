@@ -305,6 +305,8 @@ impl EdgeClient {
             return Err(EdgeError::NonZeroExitWithMessage(combined));
         }
 
+        // edge_tts 7.x 的 Communicate.stream() 只返回 MP3 (audio/mpeg, 24kHz)
+        // output_format 参数在 Python 端被忽略，保留用于将来 PCM 支持
         let sample_rate = 24_000;
         let format = "mp3";
 
