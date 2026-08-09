@@ -60,9 +60,8 @@ jobs:
           brew install create-dmg
           create-dmg \
             --volname "SayIt" \
-            --volicon "SayIt_dmg/SayIt.app/Contents/Resources/AppIcon.icns" \
             --window-pos 200 120 \
-            --size 200m \
+            --hide-extension SayIt.app \
             "SayIt.dmg" \
             "SayIt_dmg/"
 
@@ -110,7 +109,7 @@ jobs:
 
       - name: Create Inno Setup Script
         run: |
-          @"
+          $script = @'
           [Setup]
           AppName=SayIt
           AppVersion=0.1
@@ -119,12 +118,12 @@ jobs:
           OutputBaseFilename=SayIt_setup
           Compression=lzma2
           [Files]
-          Source="apps\sayit_app\build\windows\runner\Release\*";DestDir="{app}";Flags:recursesubdirs
-          "@ | Out-File -Encoding UTF8 apps/sayit_app/build/windows/runner/Release/sayit.iss
+          Source="*";DestDir="{app}";Flags:recursesubdirs
+          '@
+          $script | Out-File -FilePath "apps/sayit_app/build/windows/runner/Release/sayit.iss" -Encoding UTF8
 
       - name: Build Installer
         run: |
-          choco install innosetup -y
           & "C:\Program Files (x86)\Inno Setup 6\ISCC.exe" apps/sayit_app/build/windows/runner/Release/sayit.iss
 
       - name: Upload to Release
