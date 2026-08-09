@@ -59,11 +59,15 @@ jobs:
 
       - name: Upload to Release
         if: github.event.inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip --clobber
 
       - name: Upload to Release (release trigger)
         if: github.event.inputs.tag == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos.zip --clobber
 
@@ -102,10 +106,14 @@ jobs:
 
       - name: Upload to Release
         if: github.event.inputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
 
       - name: Upload to Release (release trigger)
         if: github.event.inputs.tag == ''
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_windows.zip --clobber
