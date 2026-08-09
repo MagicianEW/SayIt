@@ -107,6 +107,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
   Duration _currentPosition = Duration.zero;
   Duration _totalDuration = Duration.zero;
   Set<String> _availableVoices = {};
+  bool _isScanningVoices = true;
 
   String _selectedVoice = 'zh-CN-XiaoxiaoNeural';
   String _selectedLanguage = 'zh-CN';
@@ -116,6 +117,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
   double _volume = 1.0;
 
   List<VoiceInfo> get _filteredVoices {
+    if (_isScanningVoices) return [];
     return voiceData.where((v) =>
       v.languageCode == _selectedLanguage && v.gender == _selectedGender
     ).where((v) => _availableVoices.isEmpty || _availableVoices.contains(v.value)
@@ -206,6 +208,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
         if (!mounted) return;
         setState(() {
           _availableVoices = available;
+          _isScanningVoices = false;
           if (!_availableVoices.contains(_selectedVoice)) {
             final filtered = _filteredVoices;
             if (filtered.isNotEmpty) {
@@ -217,6 +220,10 @@ class _SayItHomePageState extends State<SayItHomePage> {
     } catch (e) {
       // Ignore errors, use all voices
     }
+    if (!mounted) return;
+    setState(() {
+      _isScanningVoices = false;
+    });
   }
 
   Future<SynthesisResult> _synthesizeText(String text, String voice, double speed, double pitch, double volume) async {
