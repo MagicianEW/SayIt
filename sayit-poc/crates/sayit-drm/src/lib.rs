@@ -168,11 +168,12 @@ mod tests {
 
     #[test]
     fn token_changes_after_clock_skew_jumps_window() {
-        // +3600 秒（1 小时）= 一定跨过 5 分钟边界，token 应不同
+        // +3700 秒（略多于一小时），不是 300（5分钟）的整数倍
+        // 这样无论当前时间在窗口的哪个位置，skew 后都会落在不同窗口
         let before = generate_sec_ms_gec();
-        super::adj_clock_skew_seconds(3600.0);
+        super::adj_clock_skew_seconds(3700.0);
         let after = generate_sec_ms_gec();
-        super::adj_clock_skew_seconds(-3600.0); // 撤销
+        super::adj_clock_skew_seconds(-3700.0); // 撤销
         assert_ne!(before, after);
     }
 
