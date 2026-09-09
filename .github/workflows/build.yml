@@ -124,6 +124,12 @@ jobs:
         with:
           channel: 'stable'
 
+      - name: Enable Linux desktop
+        run: |
+          flutter config --enable-linux-desktop
+          cd apps/sayit_app
+          flutter create --platforms=linux --org com.sayit . 2>/dev/null || true
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
