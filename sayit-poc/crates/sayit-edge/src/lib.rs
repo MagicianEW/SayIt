@@ -252,9 +252,11 @@ impl EdgeClient {
         let mut audio = Vec::<u8>::new();
         let mut boundaries = Vec::<Boundary>::new();
         let mut first_error: Option<String> = None;
-        let (tx, mut rx): (oneshot::Sender<(u32, String)>, oneshot::Receiver<(u32, String)>) = oneshot::channel();
+        let (tx, rx): (oneshot::Sender<(u32, String)>, oneshot::Receiver<(u32, String)>) = oneshot::channel();
 
         let read_task = async {
+            // opt_tx 允许在循环中 take() sender，send() 后变为 None，之后不再尝试发送
+            let mut opt_tx: Option<oneshot::Sender<_>> = Some(tx);
             while let Some(line) = reader.next_line().await
                 .map_err(|e| EdgeError::StdoutRead(e.to_string()))?
             {
@@ -272,8 +274,11 @@ impl EdgeClient {
                             .map_err(|e| EdgeError::Protocol(format!("meta json: {e}")))?;
                         if meta.kind == "Format" {
                             // 首条 Format META 事件：告知 Rust 层真实采样率和格式
+                            // take() 后 opt_tx 变为 None，之后循环不再尝试发送
                             if let (Some(sr), Some(fmt)) = (meta.sample_rate, &meta.format) {
-                                let _ = tx.send((sr, fmt.clone()));
+                                if let Some(tx) = opt_tx.take() {
+                                    let _ = tx.send((sr, fmt.clone()));
+                                }
                             }
                         } else if meta.kind == "WordBoundary" || meta.kind == "SentenceBoundary" {
                             // edge-tts offset is in 100ns units (audio timing), not text.
