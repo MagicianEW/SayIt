@@ -252,7 +252,7 @@ impl EdgeClient {
         let mut audio = Vec::<u8>::new();
         let mut boundaries = Vec::<Boundary>::new();
         let mut first_error: Option<String> = None;
-        let (tx, rx): (oneshot::Sender<(u32, String)>, oneshot::Receiver<(u32, String)>) = oneshot::channel();
+        let (tx, mut rx): (oneshot::Sender<(u32, String)>, oneshot::Receiver<(u32, String)>) = oneshot::channel();
 
         let read_task = async {
             // opt_tx 允许在循环中 take() sender，send() 后变为 None，之后不再尝试发送
