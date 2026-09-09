@@ -55,7 +55,7 @@ const voiceData = <VoiceInfo>[
   VoiceInfo(name: '小梦(女)-自然流畅', value: 'zh-CN-XiaomengNeural', languageCode: 'zh-CN', languageName: '中文(简体)', gender: 'female'),
   VoiceInfo(name: '云佳(女)-自然流畅', value: 'zh-CN-YunjiaNeural', languageCode: 'zh-CN', languageName: '中文(简体)', gender: 'female'),
   VoiceInfo(name: '云皓(男)-自然流畅', value: 'zh-CN-YunhaoNeural', languageCode: 'zh-CN', languageName: '中文(简体)', gender: 'male'),
-  VoiceInfo(name: '云希(男)-活泼可爱', value: 'zh-CN-YunxiNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'male'),
+  VoiceInfo(name: '云希(男)-活泼可爱', value: 'zh-TW-YunxiNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'male'),
   VoiceInfo(name: '晓汝(女)-自然流畅', value: 'zh-TW-HsiaoYuNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'female'),
   VoiceInfo(name: '云泽(男)-成熟台式', value: 'zh-TW-YunjheNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'male'),
   VoiceInfo(name: '晓晨(女)-自然流畅', value: 'zh-TW-HsiaoChenNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'female'),

@@ -12,9 +12,12 @@
 //! Python 脚本接收 JSON stdin：`{"text": "...", "voice": "...", "output_format": "..."}`
 //! Python 脚本通过 stdout 流式输出两行：
 //! - `AUDIO <base64>`：一段 PCM/MP3 字节
-//! - `META <json>`：WordBoundary / SentenceBoundary 事件
+//! - `META <json>`：WordBoundary / SentenceBoundary / Format 事件
 //! - `DONE`：结束
 //! - `ERROR <msg>`：错误
+//!
+//! 首条 `META {"type":"Format",...}` 在音频流开始前发送，告知 Rust 层
+//! 真实采样率和格式（替代硬编码），使 PCM 和 MP3 两种输出格式均能正确工作。
 //!
 //! ## v1.4 对齐
 //!
@@ -29,6 +32,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
 use tokio::process::Command;
+use tokio::sync::oneshot;
 use tokio::time::timeout;
 
 #[derive(Debug, Error)]
@@ -133,6 +137,9 @@ struct MetaFrame {
     offset: u64,
     duration: u64,
     length: Option<usize>,
+    /// 首条 META 报告的格式信息（Format 事件）
+    sample_rate: Option<u32>,
+    format: Option<String>,
 }
 
 /// Edge TTS 客户端（PyO3 子进程实现）。
@@ -245,6 +252,7 @@ impl EdgeClient {
         let mut audio = Vec::<u8>::new();
         let mut boundaries = Vec::<Boundary>::new();
         let mut first_error: Option<String> = None;
+        let (tx, mut rx): (oneshot::Sender<(u32, String)>, oneshot::Receiver<(u32, String)>) = oneshot::channel();
 
         let read_task = async {
             while let Some(line) = reader.next_line().await
@@ -262,7 +270,16 @@ impl EdgeClient {
                     if let Some(json) = line.strip_prefix("META ") {
                         let meta: MetaFrame = serde_json::from_str(json)
                             .map_err(|e| EdgeError::Protocol(format!("meta json: {e}")))?;
-                        if meta.kind == "WordBoundary" || meta.kind == "SentenceBoundary" {
+                        if meta.kind == "Format" {
+                            // 首条 Format META 事件：告知 Rust 层真实采样率和格式
+                            if let (Some(sr), Some(fmt)) = (meta.sample_rate, &meta.format) {
+                                let _ = tx.send((sr, fmt.clone()));
+                            }
+                        } else if meta.kind == "WordBoundary" || meta.kind == "SentenceBoundary" {
+                            // edge-tts offset is in 100ns units (audio timing), not text.
+                            // We preserve audio_offset_ms for audio-aligned use (sentence
+                            // highlighting). text_offset is left as 0 here — the Dart layer
+                            // performs the SSML→plain-text offset mapping when needed.
                             boundaries.push(Boundary {
                                 text_offset: 0,
                                 text_length: meta.length.unwrap_or(0),
@@ -314,16 +331,18 @@ impl EdgeClient {
             return Err(EdgeError::NonZeroExitWithMessage(combined));
         }
 
-        // edge_tts 7.x 的 Communicate.stream() 只返回 MP3 (audio/mpeg, 24kHz)
-        // output_format 参数在 Python 端被忽略，保留用于将来 PCM 支持
-        let sample_rate = 24_000;
-        let format = "mp3";
+        // 从 Python 的 Format META 事件读取真实采样率和格式
+        // 若 Python 未发送（兼容旧版本），降级到默认值
+        let (sample_rate, format) = match rx.try_recv() {
+            Ok((sr, fmt)) => (sr, fmt),
+            Err(_) => (24_000, "mp3".to_string()),
+        };
 
         Ok(SynthesizeResult {
             audio,
             sample_rate,
             channels: 1,
-            format: format.to_string(),
+            format,
             boundaries,
         })
     }
@@ -432,9 +451,29 @@ def strip_ssml(ssml: str) -> str:
     text = text.replace("&quot;", '"').replace("&apos;", "'")
     return text.strip()
 
+def parse_output_format(fmt: str):
+    """从 output_format 字符串解析采样率和格式名。"""
+    fmt_lower = fmt.lower()
+    if "16khz" in fmt_lower or "pcm" in fmt_lower:
+        return 16000, "pcm"
+    else:
+        # audio-24khz-48kbitrate-mono-mp3 及类似
+        return 24000, "mp3"
+
 async def main():
     voice = sys.argv[1]
     output_format = sys.argv[2]
+    sample_rate, fmt_name = parse_output_format(output_format)
+
+    # 立即发送 Format 元数据，Rust 层需此信息来正确解读音频
+    format_meta = {
+        "type": "Format",
+        "sample_rate": sample_rate,
+        "format": fmt_name,
+    }
+    sys.stdout.write("META " + json.dumps(format_meta) + "\n")
+    sys.stdout.flush()
+
     raw = sys.stdin.readline()
     req = json.loads(raw)
     ssml_or_text = req["ssml"]

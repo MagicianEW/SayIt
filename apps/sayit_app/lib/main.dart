@@ -24,6 +24,7 @@ import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/text_segmenter.dart';
 import 'src/voice_data.dart';
@@ -31,6 +32,8 @@ import 'src/voice_data.dart';
 void main() {
   runApp(const SayItApp());
 }
+
+const _kExportPathKey = 'sayit_export_path';
 
 class SayItApp extends StatelessWidget {
   const SayItApp({super.key});
@@ -131,6 +134,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
   void initState() {
     super.initState();
     _scanVoices();
+    _loadExportPath();
     _playerStateSub = _audioPlayer.playerStateStream.listen((state) {
       if (!mounted) return;
       setState(() {
@@ -141,14 +145,20 @@ class _SayItHomePageState extends State<SayItHomePage> {
       if (!mounted) return;
       final posMs = position.inMilliseconds;
       int sentenceIndex = 0;
-      for (int i = 0; i < _sentenceAudioOffsetsMs.length; i++) {
-        final offset = _sentenceAudioOffsetsMs[i];
-        final end = i < _sentenceAudioOffsetsMs.length - 1
-            ? _sentenceAudioOffsetsMs[i + 1]
-            : double.infinity;
-        if (posMs >= offset && posMs < end) {
-          sentenceIndex = i;
-          break;
+      if (_sentenceAudioOffsetsMs.isNotEmpty) {
+        for (int i = 0; i < _sentenceAudioOffsetsMs.length; i++) {
+          final offset = _sentenceAudioOffsetsMs[i];
+          final end = i < _sentenceAudioOffsetsMs.length - 1
+              ? _sentenceAudioOffsetsMs[i + 1]
+              : double.infinity;
+          if (posMs >= offset && posMs < end) {
+            sentenceIndex = i;
+            break;
+          }
+        }
+        // If position is beyond all known offsets, clamp to last sentence
+        if (posMs >= _sentenceAudioOffsetsMs.last) {
+          sentenceIndex = _sentenceAudioOffsetsMs.length - 1;
         }
       }
       setState(() {
@@ -439,7 +449,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
       }
 
       final firstText = _sentences.first.text;
-      final prefix = firstText.replaceAll(RegExp(r'[\\/:*?"<>|]'), '_').substring(0, firstText.length > 10 ? 10 : firstText.length);
+      final runes = firstText.runes.toList();
+      final prefix = String.fromCharCodes(runes.take(10).toList())
+          .replaceAll(RegExp(r'[\\/:*?"<>|]'), '_');
       final filePath = '$basePath/${nextNum}_$prefix.mp3';
 
       await File(filePath).writeAsBytes(Uint8List.fromList(combined));
@@ -526,6 +538,12 @@ class _SayItHomePageState extends State<SayItHomePage> {
           }
         }
 
+        // 持久化导出路径
+        if (finalExportPath != null) {
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString(_kExportPathKey, finalExportPath);
+        }
+
         if (!mounted) return;
         setState(() {
           if (importedVoice != null &&
@@ -576,8 +594,22 @@ class _SayItHomePageState extends State<SayItHomePage> {
       dialogTitle: '选择导出位置',
     );
     if (result != null) {
+      final prefs = await SharedPreferences.getInstance();
+      await prefs.setString(_kExportPathKey, result);
+      if (mounted) {
+        setState(() {
+          _exportPath = result;
+        });
+      }
+    }
+  }
+
+  Future<void> _loadExportPath() async {
+    final prefs = await SharedPreferences.getInstance();
+    final saved = prefs.getString(_kExportPathKey);
+    if (saved != null && mounted) {
       setState(() {
-        _exportPath = result;
+        _exportPath = saved;
       });
     }
   }
@@ -634,10 +666,6 @@ class _SayItHomePageState extends State<SayItHomePage> {
               Text('【导出音频】', style: TextStyle(fontWeight: FontWeight.bold)),
               Text('点击文件夹图标设置导出位置，然后点击"导出"保存为 MP3 文件。'),
               Text('文件名格式：序号_前10个字.mp3'),
-              SizedBox(height: 12),
-              Text('【文本强调】', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('选中文字后点击"强调选中"，可将词语用 [! !] 标记，播放时该词会重读。'),
-              Text('点击"预览"可查看转换后的 SSML 格式。'),
               SizedBox(height: 12),
               Text('【导入/导出设置】', style: TextStyle(fontWeight: FontWeight.bold)),
               Text('可保存当前语音设置为 JSON 文件，或从文件恢复设置。'),

@@ -33,8 +33,8 @@ cargo run -p sayit-poc-bin --quiet -- --case 3
 # 3. token 对照：Rust vs Python（如果 Python 可用）
 if command -v python3 >/dev/null 2>&1; then
   echo "[3/4] token 对照：Rust 手写 vs Python 参考"
-  RUST_TOKEN=$(cargo run -p sayit-poc-bin --quiet -- --case 3 --token-only 2>/dev/null || \
-               cargo run -p sayit-poc-bin --quiet -- --case 3 2>/dev/null | grep -oE 'token=[A-Za-z0-9.!]+' | head -1 | cut -d= -f2)
+  RUST_TOKEN=$(cargo run -p sayit-poc-bin --quiet -- --case 3 2>/dev/null | \
+               python3 -c "import sys,json; print(json.load(sys.stdin)['token_now_preview'])" 2>/dev/null || echo "")
   PY_TOKEN=$(python3 reference/edge-tts/sec_ms_gec.py 2>/dev/null || echo "")
   if [ -n "${PY_TOKEN:-}" ] && [ -n "${RUST_TOKEN:-}" ]; then
     if [ "${RUST_TOKEN}" = "${PY_TOKEN}" ]; then

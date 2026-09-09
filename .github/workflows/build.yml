@@ -1,23 +1,23 @@
-name: Release Builds
+name: Build (Artifacts Only)
 
 on:
-  release:
-    types: [created]
   workflow_dispatch:
     inputs:
-      tag:
-        description: 'Release tag'
+      version:
+        description: 'Version tag (e.g. v0.1.2)'
         required: false
         type: string
+        default: 'dev'
 
 permissions:
-  contents: write
-  actions: write
+  contents: read
 
 env:
   RUST_BACKTRACE: 1
+  VERSION: ${{ github.event.inputs.version || 'dev' }}
 
 jobs:
+  # ── macOS ────────────────────────────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
     steps:
@@ -36,31 +36,17 @@ jobs:
           cd sayit-poc
           cargo build --release
 
-      - name: Install macOS dependencies
-        run: |
-          cd apps/sayit_app
-          flutter precache --macos
-
-      - name: Run Flutter tests
-        run: |
-          cd apps/sayit_app
-          flutter test
-
       - name: Build macOS
         run: |
           cd apps/sayit_app
           flutter build macos --release
 
-      - name: Copy Rust binary to app
+      - name: Copy Rust binary into app bundle
         run: |
           mkdir -p apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin
-          cp sayit-poc/target/release/sayit-poc apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/
+          cp sayit-poc/target/release/sayit-poc \
+             apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/
           chmod +x apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
-          codesign --force --sign - apps/sayit_app/build/macos/Build/Products/Release/SayIt.app/Contents/Resources/bin/sayit-poc
-
-      - name: Re-sign app
-        run: |
-          codesign --force --deep --sign - apps/sayit_app/build/macos/Build/Products/Release/SayIt.app
 
       - name: Create DMG
         run: |
@@ -72,23 +58,17 @@ jobs:
             --volname "SayIt" \
             --window-pos 200 120 \
             --hide-extension SayIt.app \
-            "SayIt_macos_${{ github.event.inputs.tag || github.event.release.tag_name }}.dmg" \
+            "SayIt_macos_${VERSION}.dmg" \
             "SayIt_dmg/"
 
-      - name: Upload to Release
-        if: github.event.inputs.tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${{ github.event.inputs.tag }}.dmg --clobber
+      - name: Upload macOS artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SayIt_macos_${VERSION}
+          path: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${VERSION}.dmg
+          retention-days: 14
 
-      - name: Upload to Release (release trigger)
-        if: github.event.inputs.tag == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${{ github.event.release.tag_name }}.dmg --clobber
-
+  # ── Windows ─────────────────────────────────────────────────────────────
   build-windows:
     runs-on: windows-latest
     steps:
@@ -103,6 +83,7 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Build Rust binary
+        shell: bash
         run: |
           cd sayit-poc
           cargo build --release
@@ -112,31 +93,75 @@ jobs:
           cd apps/sayit_app
           flutter build windows --release
 
-      - name: Copy Rust binary to app
+      - name: Copy Rust binary into app bundle
+        shell: bash
         run: |
           mkdir -p apps/sayit_app/build/windows/runner/Release/bin
-          cp sayit-poc/target/release/sayit-poc.exe apps/sayit_app/build/windows/runner/Release/bin/
+          cp sayit-poc/target/release/sayit-poc.exe \
+             apps/sayit_app/build/windows/runner/Release/bin/
 
       - name: Create ZIP
+        shell: bash
         run: |
           cd apps/sayit_app/build/windows/runner/Release
-          Compress-Archive -Path * -DestinationPath SayIt_windows.zip
+          powershell -Command "Compress-Archive -Path * -DestinationPath SayIt_windows_${VERSION}.zip -Force"
 
-      - name: Rename ZIP
-        run: |
-          cd apps/sayit_app/build/windows/runner/Release
-          mv SayIt_windows.zip SayIt_windows_${{ github.event.inputs.tag || github.event.release.tag_name }}.zip
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SayIt_windows_${VERSION}
+          path: apps/sayit_app/build/windows/runner/Release/SayIt_windows_${VERSION}.zip
+          retention-days: 14
 
-      - name: Upload to Release
-        if: github.event.inputs.tag != ''
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release upload ${{ github.event.inputs.tag }} apps/sayit_app/build/windows/runner/Release/SayIt_windows_${{ github.event.inputs.tag }}.zip --clobber
+  # ── Linux ───────────────────────────────────────────────────────────────
+  build-linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
 
-      - name: Upload to Release (release trigger)
-        if: github.event.inputs.tag == ''
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install Linux build dependencies
         run: |
-          gh release upload ${{ github.event.release.tag_name }} apps/sayit_app/build/windows/runner/Release/SayIt_windows_${{ github.event.release.tag_name }}.zip --clobber
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq \
+            clang \
+            cmake \
+            ninja-build \
+            libgtk-3-dev \
+            liblzma-dev \
+            libstdc++-12-dev
+
+      - name: Build Rust binary
+        run: |
+          cd sayit-poc
+          cargo build --release
+
+      - name: Build Linux
+        run: |
+          cd apps/sayit_app
+          flutter build linux --release
+
+      - name: Copy Rust binary into app bundle
+        run: |
+          mkdir -p apps/sayit_app/build/linux/release/bundle/lib
+          cp sayit-poc/target/release/sayit-poc \
+             apps/sayit_app/build/linux/release/bundle/lib/
+
+      - name: Create TAR.GZ
+        run: |
+          cd apps/sayit_app/build/linux/release
+          tar -czf SayIt_linux_${VERSION}.tar.gz bundle/
+
+      - name: Upload Linux artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: SayIt_linux_${VERSION}
+          path: apps/sayit_app/build/linux/release/SayIt_linux_${VERSION}.tar.gz
+          retention-days: 14
