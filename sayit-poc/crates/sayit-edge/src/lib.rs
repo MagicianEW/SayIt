@@ -133,8 +133,11 @@ pub struct Voice {
 struct MetaFrame {
     #[serde(rename = "type")]
     kind: String,
+    #[serde(default)]
     text: String,
+    #[serde(default)]
     offset: u64,
+    #[serde(default)]
     duration: u64,
     length: Option<usize>,
     /// 首条 META 报告的格式信息（Format 事件）

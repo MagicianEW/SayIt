@@ -88,6 +88,12 @@ jobs:
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
+      - name: Enable Windows desktop
+        run: |
+          flutter config --enable-windows-desktop
+          cd apps/sayit_app
+          flutter create --platforms=windows --org com.sayit . 2>nul || exit /b 0
+
       - name: Build Rust binary
         shell: bash
         run: |
@@ -134,7 +140,7 @@ jobs:
         run: |
           flutter config --enable-linux-desktop
           cd apps/sayit_app
-          flutter create --platforms=linux --org com.sayit . 2>/dev/null || true
+          flutter create --platforms=linux --org com.sayit . 2>&1 | grep -v "^Running \"flutter create\"" || true
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
