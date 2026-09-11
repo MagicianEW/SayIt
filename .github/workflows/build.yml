@@ -106,16 +106,12 @@ jobs:
           flutter build windows --release
 
       - name: Copy Rust binary into app bundle
-        shell: bash
         run: |
-          mkdir -p apps/sayit_app/build/windows/runner/Release/bin
+          # Flutter Windows build outputs to build\windows\x64\runner\Release\
+          # Copy Flutter app + Rust binary into that dir, then zip from there
           cp sayit-poc/target/release/sayit-poc.exe \
-             apps/sayit_app/build/windows/runner/Release/bin/
-
-      - name: Create ZIP
-        shell: bash
-        run: |
-          cd apps/sayit_app/build/windows/runner/Release
+             apps/sayit_app/build/windows/x64/runner/Release/
+          cd apps/sayit_app/build/windows/x64/runner/Release
           powershell -Command "Compress-Archive -Path * -DestinationPath SayIt_windows_${{ env.VERSION }}.zip -Force"
 
       - name: Upload Windows artifact
@@ -163,20 +159,18 @@ jobs:
 
       - name: Copy Rust binary into app bundle
         run: |
-          mkdir -p apps/sayit_app/build/linux/release/bundle/lib
+          # Flutter Linux build outputs to build/linux/x64/release/bundle/
+          # Copy Rust binary into that bundle, then repack from the correct dir
           cp sayit-poc/target/release/sayit-poc \
-             apps/sayit_app/build/linux/release/bundle/lib/
-
-      - name: Create TAR.GZ
-        run: |
-          cd apps/sayit_app/build/linux/release
+             apps/sayit_app/build/linux/x64/release/bundle/lib/
+          cd apps/sayit_app/build/linux/x64/release
           tar -czf SayIt_linux_${{ env.VERSION }}.tar.gz bundle/
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: SayIt_linux_${{ env.VERSION }}
-          path: apps/sayit_app/build/linux/release/SayIt_linux_${{ env.VERSION }}.tar.gz
+          path: apps/sayit_app/build/linux/x64/release/SayIt_linux_${{ env.VERSION }}.tar.gz
           retention-days: 14
 
   # ── Release ─────────────────────────────────────────────────────────────
