@@ -177,9 +177,10 @@ jobs:
   release:
     needs: [build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
-    # 仅 release 触发时发布；workflow_dispatch 仅构建不上传
     if: github.event_name == 'release'
     steps:
+      - uses: actions/checkout@v4
+
       - name: Download all artifacts
         uses: actions/download-artifact@v4
         with:
