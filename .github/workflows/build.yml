@@ -1,20 +1,26 @@
-name: Build (Artifacts Only)
+name: Build & Release
 
 on:
+  # 手动触发（测试用）
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag (e.g. v0.1.2)'
+        description: '版本号（用于 artifact 命名）'
         required: false
         type: string
         default: 'dev'
 
+  # Release 发布时触发（正式发布）
+  release:
+    types: [published]
+
 permissions:
-  contents: read
+  contents: write
 
 env:
   RUST_BACKTRACE: 1
-  VERSION: ${{ github.event.inputs.version || 'dev' }}
+  # workflow_dispatch: input.version; release: event.release.tag_name; fallback: dev
+  VERSION: ${{ github.event.inputs.version || github.event.release.tag_name || 'dev' }}
 
 jobs:
   # ── macOS ────────────────────────────────────────────────────────────────
@@ -58,14 +64,14 @@ jobs:
             --volname "SayIt" \
             --window-pos 200 120 \
             --hide-extension SayIt.app \
-            "SayIt_macos_${VERSION}.dmg" \
+            "SayIt_macos_${{ env.VERSION }}.dmg" \
             "SayIt_dmg/"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SayIt_macos_${VERSION}
-          path: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${VERSION}.dmg
+          name: SayIt_macos_${{ env.VERSION }}
+          path: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${{ env.VERSION }}.dmg
           retention-days: 14
 
   # ── Windows ─────────────────────────────────────────────────────────────
@@ -104,13 +110,13 @@ jobs:
         shell: bash
         run: |
           cd apps/sayit_app/build/windows/runner/Release
-          powershell -Command "Compress-Archive -Path * -DestinationPath SayIt_windows_${VERSION}.zip -Force"
+          powershell -Command "Compress-Archive -Path * -DestinationPath SayIt_windows_${{ env.VERSION }}.zip -Force"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SayIt_windows_${VERSION}
-          path: apps/sayit_app/build/windows/runner/Release/SayIt_windows_${VERSION}.zip
+          name: SayIt_windows_${{ env.VERSION }}
+          path: apps/sayit_app/build/windows/runner/Release/SayIt_windows_${{ env.VERSION }}.zip
           retention-days: 14
 
   # ── Linux ───────────────────────────────────────────────────────────────
@@ -137,12 +143,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            clang \
-            cmake \
-            ninja-build \
-            libgtk-3-dev \
-            liblzma-dev \
-            libstdc++-12-dev
+            clang cmake ninja-build libgtk-3-dev liblzma-dev libstdc++-12-dev
 
       - name: Build Rust binary
         run: |
@@ -163,11 +164,61 @@ jobs:
       - name: Create TAR.GZ
         run: |
           cd apps/sayit_app/build/linux/release
-          tar -czf SayIt_linux_${VERSION}.tar.gz bundle/
+          tar -czf SayIt_linux_${{ env.VERSION }}.tar.gz bundle/
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SayIt_linux_${VERSION}
-          path: apps/sayit_app/build/linux/release/SayIt_linux_${VERSION}.tar.gz
+          name: SayIt_linux_${{ env.VERSION }}
+          path: apps/sayit_app/build/linux/release/SayIt_linux_${{ env.VERSION }}.tar.gz
           retention-days: 14
+
+  # ── Release ─────────────────────────────────────────────────────────────
+  release:
+    needs: [build-macos, build-windows, build-linux]
+    runs-on: ubuntu-latest
+    # 仅 release 触发时发布；workflow_dispatch 仅构建不上传
+    if: github.event_name == 'release'
+    steps:
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.event.release.tag_name }}
+          RELEASE_NAME: SayIt ${{ github.event.release.tag_name }}
+          BODY: |
+            ## SayIt v${{ github.event.release.tag_name }}
+
+            本地桌面文本转语音（TTS）工具，支持多语种、多音色。
+
+            ### 下载对应平台的安装包
+
+            | 平台 | 文件 |
+            |------|------|
+            | macOS | SayIt_macos_${{ github.event.release.tag_name }}.dmg |
+            | Windows | SayIt_windows_${{ github.event.release.tag_name }}.zip |
+            | Linux | SayIt_linux_${{ github.event.release.tag_name }}.tar.gz |
+
+            ### 前置依赖
+
+            - Python 3.8+ 和 `edge_tts` 模块：`pip install edge_tts`
+
+            ### 已知问题
+
+            - macOS 为临时签名，Gatekeeper 首次会提示"无法验证开发者"，右键打开即可。
+
+        run: |
+          # 获取 artifact 实际文件名（VERSION 可能与 tag 不同）
+          ARTIFACT_VERSION="${{ github.event.release.tag_name }}"
+          echo "发布版本: $ARTIFACT_VERSION"
+
+          gh release create "$TAG_NAME" \
+            --title "$RELEASE_NAME" \
+            --notes "$BODY" \
+            artifacts/SayIt_macos_*/SayIt_macos_*.dmg \
+            artifacts/SayIt_windows_*/SayIt_windows_*.zip \
+            artifacts/SayIt_linux_*/SayIt_linux_*.tar.gz

@@ -694,7 +694,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
           mainAxisSize: MainAxisSize.min,
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('版本: v0.1.2'),
+            Text('版本: v0.1.3'),
             SizedBox(height: 8),
             Text('开发者: MagicianEW'),
             SizedBox(height: 16),
