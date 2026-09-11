@@ -192,40 +192,18 @@ jobs:
         with:
           path: artifacts/
 
-      - name: Create GitHub Release
+      - name: Upload to GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG_NAME: ${{ github.event.release.tag_name }}
-          RELEASE_NAME: SayIt ${{ github.event.release.tag_name }}
-          BODY: |
-            ## SayIt v${{ github.event.release.tag_name }}
-
-            本地桌面文本转语音（TTS）工具，支持多语种、多音色。
-
-            ### 下载对应平台的安装包
-
-            | 平台 | 文件 |
-            |------|------|
-            | macOS | SayIt_macos_${{ github.event.release.tag_name }}.dmg |
-            | Windows | SayIt_windows_${{ github.event.release.tag_name }}.zip |
-            | Linux | SayIt_linux_${{ github.event.release.tag_name }}.tar.gz |
-
-            ### 前置依赖
-
-            - Python 3.8+ 和 `edge_tts` 模块：`pip install edge_tts`
-
-            ### 已知问题
-
-            - macOS 为临时签名，Gatekeeper 首次会提示"无法验证开发者"，右键打开即可。
 
         run: |
-          # 获取 artifact 实际文件名（VERSION 可能与 tag 不同）
+          # 发布版本已存在，只需上传 artifacts
           ARTIFACT_VERSION="${{ github.event.release.tag_name }}"
-          echo "发布版本: $ARTIFACT_VERSION"
+          echo "上传 artifacts 到 $ARTIFACT_VERSION"
 
-          gh release create "$TAG_NAME" \
-            --title "$RELEASE_NAME" \
-            --notes "$BODY" \
+          gh release upload "$TAG_NAME" \
             artifacts/SayIt_macos_*/SayIt_macos_*.dmg \
             artifacts/SayIt_windows_*/SayIt_windows_*.zip \
-            artifacts/SayIt_linux_*/SayIt_linux_*.tar.gz
+            artifacts/SayIt_linux_*/SayIt_linux_*.tar.gz \
+            --clobber
