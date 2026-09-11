@@ -107,9 +107,10 @@ jobs:
           flutter build windows --release
 
       - name: Copy Rust binary into app bundle
+        shell: bash
         run: |
           cp sayit-poc/target/release/sayit-poc.exe \
-             apps/sayit_app/build/windows/x64/runner/Release/
+             "apps/sayit_app/build/windows/x64/runner/Release/"
           cd "apps/sayit_app/build/windows/x64/runner/Release"
           powershell -Command "Compress-Archive -Path * -DestinationPath SayIt_windows_${{ env.VERSION }}.zip -Force"
 
