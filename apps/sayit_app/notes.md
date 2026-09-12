@@ -97,8 +97,12 @@ com.ryanheise.just_audio.methods)` —— 容易误判成自己写错了。
   换来的是零运行时依赖，解压即用。
 - Linux 上 libmpv **不随包分发**（`media_kit_libs_linux` 的 CMake 只处理 mimalloc，
   并把 `bundled_libraries` 置空），media_kit 在运行期 `dlopen` 系统里的
-  `libmpv.so.*`。所以打包时要把 `libmpv.so.*` 拷进 `bundle/lib/`（Flutter 的 Linux
-  bundle 自带 `RPATH=$ORIGIN/lib`），并保留「装系统 libmpv」作为兜底说明。
+  `libmpv.so.*`。所以 libmpv 是 Linux 的**运行前提**，写进 README。
+  **不要试图把 `libmpv.so.*` 拷进 `bundle/lib/` 来"自带"它**：`libmpv2` 自身还依赖
+  40 多个库（libplacebo / libmujs / libbluray / libsdl2 / ffmpeg 各件……），大多不在
+  默认桌面环境里；只塞一个 `libmpv.so.2` 凑不出完整依赖，还会因为 Flutter Linux
+  bundle 自带 `RPATH=$ORIGIN/lib` 而抢在系统库之前生效 —— 在只有 `libmpv.so.1` 的
+  22.04 上反而会把本来能用的系统库挡掉。
 - 必须在 `main()` 里显式调一次 `JustAudioMediaKit.ensureInitialized()`。
   默认只在 windows / linux 上注册，macOS 不受影响。
 

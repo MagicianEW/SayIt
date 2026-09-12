@@ -230,11 +230,7 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            clang cmake ninja-build libgtk-3-dev liblzma-dev libstdc++-12-dev \
-            libmpv-dev
-          # libmpv 是音频后端 media_kit 的运行期依赖：它不随 pub 包分发，
-          # 而是在运行时 dlopen 系统里的 libmpv.so.*（见下方打包步骤）。
-          # 装 libmpv-dev 是为了拿到 libmpv.so.*（24.04 是 libmpv2、22.04 是 libmpv1）。
+            clang cmake ninja-build libgtk-3-dev liblzma-dev libstdc++-12-dev
 
       - name: Build Rust binary
         run: |
@@ -255,14 +251,13 @@ jobs:
              apps/sayit_app/build/linux/x64/release/bundle/
           chmod +x apps/sayit_app/build/linux/x64/release/bundle/sayit-poc
 
-          # 把 libmpv 一并打进去：media_kit 在 Linux 上是运行时 dlopen libmpv.so.*，
-          # 不打进去的话用户还得自己 apt install libmpv2，否则一播放就报找不到。
-          # Flutter 的 Linux bundle 自带 RPATH=$ORIGIN/lib，所以放进 lib/ 就能被找到。
-          # 用 -L 跟到真实文件、忽略链接名；万一发行版包名不同（libmpv.so.1/2）
-          # 也不会让整步失败。
-          mkdir -p apps/sayit_app/build/linux/x64/release/bundle/lib
-          cp -Lv /usr/lib/x86_64-linux-gnu/libmpv.so.* \
-             apps/sayit_app/build/linux/x64/release/bundle/lib/ || true
+          # 注意：这里**不**打包 libmpv。音频后端 media_kit 是在运行时 dlopen
+          # 系统里的 libmpv.so.*，而 libmpv2 自身还依赖 40 多个库（libplacebo、
+          # libmujs、libbluray、libsdl2、ffmpeg 各件……）大多不在默认桌面环境里。
+          # 只塞一个 libmpv.so.2 进来既凑不出完整依赖、又会在 22.04 这类只有
+          # libmpv.so.1 的系统上抢先生效而加载失败。所以按上游（media_kit）的
+          # 约定，把 libmpv 当作系统依赖，写进 README 的运行前提里 —— 与本项目
+          # 本就要求用户自装 Python + edge_tts 的约定一致。
 
           ls -l apps/sayit_app/build/linux/x64/release/bundle/
           cd apps/sayit_app/build/linux/x64/release

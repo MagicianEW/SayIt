@@ -120,16 +120,22 @@ MethodChannel。初始化只需在 `main()` 里调一次 `JustAudioMediaKit.ensu
 | 平台 | libmpv 来源 | 是否需要额外安装 |
 |------|-------------|------------------|
 | Windows | `media_kit_libs_windows_audio` 随包自带 libmpv / FFmpeg DLL | 否，解压即用 |
-| Linux | 系统提供（media_kit 运行期 `dlopen`） | 打包时已把 `libmpv.so.*` 放进 `bundle/lib/`；若仍报找不到，按下表装 |
+| Linux | 需要系统提供（media_kit 运行期 `dlopen`） | **是**，按下表装 |
 
 ```bash
-# Debian / Ubuntu（22.04 上的包名是 libmpv1）
-sudo apt install libmpv2 mpv
+# Debian / Ubuntu（24.04 是 libmpv2；22.04 是 libmpv1）
+sudo apt install libmpv2
 # Fedora
-sudo dnf install mpv-libs mpv
+sudo dnf install mpv-libs
 # Arch
 sudo pacman -S mpv
 ```
+
+> **Linux 上为什么不把 libmpv 直接打进包里**：`libmpv2` 自身还依赖 40 多个库
+> （libplacebo、libmujs、libbluray、libsdl2、ffmpeg 各件……），大多不在默认桌面环境里。
+> 只塞一个 `libmpv.so.2` 既凑不出完整依赖，又会在 22.04 这类只有 `libmpv.so.1` 的系统上
+> 抢先生效、反而加载失败。所以按 media_kit 的约定把 libmpv 当系统依赖 ——
+> 这与本项目本就要求自装 Python + edge_tts 的约定是一致的。
 
 > 之所以不用 `just_audio_windows`：它体积更小，但对「读取字节流」标注为 *not tested*，
 > 而本应用的 `_BytesAudioSource` 正是把内存里的 MP3 交给 just_audio 的本地 HTTP 代理
