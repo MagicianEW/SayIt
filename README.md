@@ -201,6 +201,29 @@ gh release create v0.1.4 --title "SayIt v0.1.4" --generate-notes
 - 想只做一次测试构建、不发布，用 `workflow_dispatch` 手动触发（可指定版本号，
   留空则用仓库 `VERSION` 里的值）。
 
+### 同一个版本号重新出包
+
+修完 bug 但版本号不动（比如 v0.1.4 要重出）时，有两个前提容易漏：
+
+1. **tag 必须指向新提交** —— CI 按 release 对应 tag 的提交构建，光推 `main` 没用。
+2. **必须重新触发 `release: published`** —— 只推 tag 不触发任何构建。
+
+```bash
+# 0. 取 release id
+gh api repos/<owner>/<repo>/releases/tags/v0.1.4 --jq .id
+
+# 1. 把 tag 移到新提交（tag 已存在，要 --force）
+git tag -f v0.1.4 <新提交>
+git push --force origin v0.1.4
+
+# 2. 重新触发：Release 先置回草稿、再重新发布
+gh api -X PATCH repos/<owner>/<repo>/releases/<release_id> -F draft=true
+gh api -X PATCH repos/<owner>/<repo>/releases/<release_id> -F draft=false
+```
+
+> 别用「删 Release + 删 tag 再重建」：正文会丢，而且中途失败容易留下一个游离的
+> 草稿 Release。上面的草稿往返能同时保留正文和 tag 关联。
+
 ## macOS 安装说明
 
 ⚠️ 当前 release 为**临时签名**（ad-hoc），未通过 Apple 公证。首次打开会提示"无法验证开发者"。

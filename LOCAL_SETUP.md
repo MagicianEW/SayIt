@@ -102,5 +102,25 @@ rustup component add rustfmt clippy
 **Q：跑用例 4 时 PoC 没产生 boundaries？**  
 A：可能服务端拒连（403）或返回空。检查日志 `RUST_LOG=debug cargo run -p sayit-poc-bin -- --case 4 -v`。这是预期内的失败：v1.4 §9.2 已经写明"边界缺失"是中等风险降级路径。
 
+**Q：`Building with plugins requires symlink support.` 又没管理员权限，怎么办？**  
+A：正解是开启开发者模式。确实开不了（比如没有管理员权限）时，可以退而用**目录联接**
+顶替符号链接 —— 建目录联接不需要管理员权限，而 Flutter 对已存在的链接会直接跳过：
+
+```powershell
+$base = "apps\sayit_app\windows\flutter\ephemeral\.plugin_symlinks"
+$pub  = "$env:LOCALAPPDATA\Pub\Cache\hosted\pub.dev"
+# 插件名和路径以 apps/sayit_app/.flutter-plugins-dependencies 里 windows 列表为准
+New-Item -ItemType Junction -Path "$base\media_kit_libs_windows_audio" `
+         -Target "$pub\media_kit_libs_windows_audio-1.0.9"
+```
+
+注意 `flutter pub get` 每次都会以 `force` 重建该目录，会把联接清掉，所以这个办法
+只适合「pub get 之后、build 之前」临时补一次。长期还是建议开开发者模式。
+
+**Q：`Unable to find suitable Visual Studio toolchain.`？**  
+A：VS 生成工具装了但没勾「使用 C++ 的桌面开发」工作负载。跑 `flutter doctor -v`
+会列出具体缺失组件，在 VS Installer 里勾上补齐即可。注意只有带原生代码的插件才会
+用到它 —— 只跑 Rust PoC 和单元测试时不需要。
+
 **Q：token 对照显示不一致？**  
 A：核对 `sayit-drm/src/lib.rs` 中的 `CHARS`（80 字符）与 `INDEX_CHARS`（16 字符）是否与 `reference/edge-tts/sec_ms_gec.py` 完全对齐。差异通常来自字符表抄错。
