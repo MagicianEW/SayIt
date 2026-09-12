@@ -5,10 +5,10 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: '版本号（用于 artifact 命名）'
+        description: '版本号（如 0.2.0）。留空则用仓库 VERSION 文件里的值'
         required: false
         type: string
-        default: 'dev'
+        default: ''
 
   # Release 发布时触发（正式发布）
   release:
@@ -19,8 +19,16 @@ permissions:
 
 env:
   RUST_BACKTRACE: 1
-  # workflow_dispatch: input.version; release: event.release.tag_name; fallback: dev
-  VERSION: ${{ github.event.inputs.version || github.event.release.tag_name || 'dev' }}
+
+# 版本号与应用名的处理约定（重要）：
+#
+#   版本号的唯一来源是仓库根的 VERSION 文件。发版时这里会从 tag / 手动输入
+#   取出版本号写进 VERSION，再由 scripts/sync_version.py 同步到 pubspec.yaml、
+#   Cargo.toml 和 lib/src/build_info.dart —— 这样 artifact 文件名、Flutter 打进
+#   macOS/Windows 的版本资源、以及 `sayit-poc --version` 报的版本三者必然一致。
+#   以前 tag 只用来命名产物，二进制内部仍是 pubspec 里写死的值，两者会打架。
+#
+#   应用名同理，由 scripts/sync_app_name.py 统一同步到各平台元数据。
 
 jobs:
   # ── macOS ────────────────────────────────────────────────────────────────
@@ -28,6 +36,24 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Sync version and app name
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW="${{ github.event.inputs.version || github.event.release.tag_name || '' }}"
+          RAW="${RAW#v}"
+          if [ -n "$RAW" ]; then
+            python scripts/sync_version.py --set "$RAW"
+          fi
+          python scripts/sync_app_name.py
+          echo "version=$(python scripts/sync_version.py --print)" >> "$GITHUB_OUTPUT"
 
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
@@ -65,14 +91,14 @@ jobs:
             --volname "SayIt" \
             --window-pos 200 120 \
             --hide-extension SayIt.app \
-            "SayIt_macos_${{ env.VERSION }}.dmg" \
+            "SayIt_macos_${{ steps.ver.outputs.version }}.dmg" \
             "SayIt_dmg/"
 
       - name: Upload macOS artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SayIt_macos_${{ env.VERSION }}
-          path: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${{ env.VERSION }}.dmg
+          name: SayIt_macos_${{ steps.ver.outputs.version }}
+          path: apps/sayit_app/build/macos/Build/Products/Release/SayIt_macos_${{ steps.ver.outputs.version }}.dmg
           retention-days: 14
 
   # ── Windows ─────────────────────────────────────────────────────────────
@@ -81,19 +107,42 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Sync version and app name
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW="${{ github.event.inputs.version || github.event.release.tag_name || '' }}"
+          RAW="${RAW#v}"
+          if [ -n "$RAW" ]; then
+            python scripts/sync_version.py --set "$RAW"
+          fi
+          python scripts/sync_app_name.py
+          echo "version=$(python scripts/sync_version.py --print)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
-
       - name: Enable Windows desktop
+        shell: bash
         run: |
           flutter config --enable-windows-desktop
           cd apps/sayit_app
-          flutter create --platforms=windows --org com.sayit . 2>nul || exit /b 0
+          # windows/ 已随仓库提交，里面有我们手工维护的应用名、可执行名和版本配置。
+          # 只在目录缺失时才让 flutter create 生成，避免模板把手工改动覆盖掉。
+          if [ ! -f windows/CMakeLists.txt ]; then
+            flutter create --platforms=windows --org com.sayit .
+          fi
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
 
       - name: Build Rust binary
         shell: bash
@@ -109,16 +158,21 @@ jobs:
       - name: Copy Rust binary into app bundle
         shell: bash
         run: |
+          # Dart 端在 <exe 所在目录>/bin/ 下查找 sayit-poc.exe（见 main.dart
+          # _pocBinaryCandidates）。以前拷到 Release/ 根目录，和查找位置差一层，
+          # 发布出去的 Windows 包必然"找不到引擎"。
+          mkdir -p "apps/sayit_app/build/windows/x64/runner/Release/bin"
           cp sayit-poc/target/release/sayit-poc.exe \
-             "apps/sayit_app/build/windows/x64/runner/Release/"
+             "apps/sayit_app/build/windows/x64/runner/Release/bin/"
+          ls -l "apps/sayit_app/build/windows/x64/runner/Release/bin/"
           cd "apps/sayit_app/build/windows/x64/runner/Release"
-          powershell -Command "Compress-Archive -Path * -DestinationPath SayIt_windows_${{ env.VERSION }}.zip -Force"
+          powershell -Command "Compress-Archive -Path * -DestinationPath SayIt_windows_${{ steps.ver.outputs.version }}.zip -Force"
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SayIt_windows_${{ env.VERSION }}
-          path: apps/sayit_app/build/windows/x64/runner/Release/SayIt_windows_${{ env.VERSION }}.zip
+          name: SayIt_windows_${{ steps.ver.outputs.version }}
+          path: apps/sayit_app/build/windows/x64/runner/Release/SayIt_windows_${{ steps.ver.outputs.version }}.zip
           retention-days: 14
 
   # ── Linux ───────────────────────────────────────────────────────────────
@@ -127,19 +181,46 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Sync version and app name
+        id: ver
+        shell: bash
+        run: |
+          set -euo pipefail
+          RAW="${{ github.event.inputs.version || github.event.release.tag_name || '' }}"
+          RAW="${RAW#v}"
+          if [ -n "$RAW" ]; then
+            python scripts/sync_version.py --set "$RAW"
+          fi
+          python scripts/sync_app_name.py
+          echo "version=$(python scripts/sync_version.py --print)" >> "$GITHUB_OUTPUT"
+
       - name: Setup Flutter
         uses: subosito/flutter-action@v2
         with:
           channel: 'stable'
 
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
       - name: Enable Linux desktop
+        shell: bash
         run: |
           flutter config --enable-linux-desktop
           cd apps/sayit_app
-          flutter create --platforms=linux --org com.sayit . 2>&1 | grep -v "^Running \"flutter create\"" || true
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@stable
+          # 与 Windows 不同，linux/ 目录**没有**提交进仓库（模板文件放在版本
+          # 控制里意义不大，且各家 Flutter 版本模板会漂）。这里现场生成，
+          # 生成后必须再跑一次名字同步，否则 Linux 的应用名会是模板默认的
+          # sayit_app，与其他平台不一致。
+          if [ ! -f linux/CMakeLists.txt ]; then
+            flutter create --platforms=linux --org com.sayit .
+          fi
+          cd ../..
+          python scripts/sync_app_name.py
 
       - name: Install Linux build dependencies
         run: |
@@ -160,17 +241,20 @@ jobs:
       - name: Copy Rust binary into app bundle
         run: |
           # Flutter Linux build outputs to build/linux/x64/release/bundle/
-          # Copy Rust binary into that bundle, then repack from the correct dir
+          # 可执行文件在 bundle/ 下，Dart 端也在 bundle/ 下查找（见 main.dart
+          # _pocBinaryCandidates）。以前拷到 bundle/lib/，多了一层，运行时找不到。
           cp sayit-poc/target/release/sayit-poc \
-             apps/sayit_app/build/linux/x64/release/bundle/lib/
+             apps/sayit_app/build/linux/x64/release/bundle/
+          chmod +x apps/sayit_app/build/linux/x64/release/bundle/sayit-poc
+          ls -l apps/sayit_app/build/linux/x64/release/bundle/
           cd apps/sayit_app/build/linux/x64/release
-          tar -czf SayIt_linux_${{ env.VERSION }}.tar.gz bundle/
+          tar -czf SayIt_linux_${{ steps.ver.outputs.version }}.tar.gz bundle/
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
-          name: SayIt_linux_${{ env.VERSION }}
-          path: apps/sayit_app/build/linux/x64/release/SayIt_linux_${{ env.VERSION }}.tar.gz
+          name: SayIt_linux_${{ steps.ver.outputs.version }}
+          path: apps/sayit_app/build/linux/x64/release/SayIt_linux_${{ steps.ver.outputs.version }}.tar.gz
           retention-days: 14
 
   # ── Release ─────────────────────────────────────────────────────────────
@@ -192,12 +276,22 @@ jobs:
           TAG_NAME: ${{ github.event.release.tag_name }}
 
         run: |
-          # 发布版本已存在，只需上传 artifacts
-          ARTIFACT_VERSION="${{ github.event.release.tag_name }}"
-          echo "上传 artifacts 到 $ARTIFACT_VERSION"
+          # 发布版本已存在，只需上传 artifacts。
+          # 以前直接把 glob 交给 gh：只要有一个匹配不到文件，整步就失败，
+          # 而且看不出到底缺了哪个平台。这里先展开成具体文件列表再上传。
+          set -euo pipefail
+          shopt -s nullglob
+          files=()
+          files+=(artifacts/SayIt_macos_*/SayIt_macos_*.dmg)
+          files+=(artifacts/SayIt_windows_*/SayIt_windows_*.zip)
+          files+=(artifacts/SayIt_linux_*/SayIt_linux_*.tar.gz)
 
-          gh release upload "$TAG_NAME" \
-            artifacts/SayIt_macos_*/SayIt_macos_*.dmg \
-            artifacts/SayIt_windows_*/SayIt_windows_*.zip \
-            artifacts/SayIt_linux_*/SayIt_linux_*.tar.gz \
-            --clobber
+          if [ ${#files[@]} -eq 0 ]; then
+            echo "::error::没有找到任何构建产物，release 上传中止"
+            exit 1
+          fi
+
+          echo "上传 ${#files[@]} 个文件到 $TAG_NAME"
+          printf '  %s\n' "${files[@]}"
+
+          gh release upload "$TAG_NAME" "${files[@]}" --clobber

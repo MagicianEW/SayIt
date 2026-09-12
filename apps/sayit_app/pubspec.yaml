@@ -1,7 +1,7 @@
 name: sayit_app
-description: "SayIt - Personal TTS desktop app (Stage 1b: Flutter + Rust bridge)"
+description: "SayIt - local desktop TTS tool (Flutter UI + Rust sidecar process)"
 publish_to: 'none'
-version: 0.1.3
+version: 0.1.4
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -10,20 +10,18 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  ffi: ^2.1.0
-  riverpod: ^2.5.0
   just_audio: ^0.9.40
   file_picker: ^8.0.0
   path_provider: ^2.1.0
-  flutter_rust_bridge: ^2.0.0
   shared_preferences: ^2.2.2
 
+# 说明：Dart 与 Rust 之间通过 `sayit-poc` 命令行子进程通信（stdout 传 JSON），
+# 并不使用 flutter_rust_bridge / ffi / riverpod，故不再声明这些依赖。
+# 若将来要改用 FRB 直连，需要重新加入并重新生成 lib/src/rust/。
 dev_dependencies:
   flutter_test:
     sdk: flutter
   flutter_lints: ^4.0.0
-  ffigen: ^14.0.0
-  build_runner: ^2.4.0
 
 flutter:
   uses-material-design: true

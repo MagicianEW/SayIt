@@ -1,53 +1,68 @@
-# 阶段 1b 接入 flutter_rust_bridge —— 步骤清单
+# 架构决策：Dart ↔ Rust 不用 flutter_rust_bridge，改用子进程
 
-> 这是**手动逐步**清单，阶段 1b 开始时逐条勾选。
+> **本文件的前身是「阶段 1b 接入 flutter_rust_bridge 的步骤清单」。该方案已放弃。**
+> 之所以保留这个文件而不是直接删掉，是为了把决策和取舍写下来 ——
+> 否则以后有人看到 `lib/src/rust/` 空着，很可能又会按旧清单把 FRB 加回来。
 
-## 1. 准备 Rust workspace
+## 现在的做法
 
-- [ ] 在 `sayit-poc/Cargo.toml` workspace 中确认 `sayit-edge`、`sayit-drm` 是 member（已是）
-- [ ] 给 `sayit-edge` 与 `sayit-drm` 的 `lib.rs` 加 `#[flutter_rust_bridge::frb(init)]` 占位（待 1b 实施）
-- [ ] 在 `sayit-poc` 根添加 `flutter` 作为 `frontend`（flutter_rust_bridge 模板）
+Dart 用 `Process.run` 调起独立可执行程序 `sayit-poc`，Rust 把结果以 JSON 打到 stdout。
 
-## 2. 准备 Flutter 工程
+```dart
+// lib/main.dart
+final result = await Process.run(pocBinary, [
+  '--synthesize-text=$encodedText',   // base64，避免命令行转义问题
+  '--voice=$voice',
+  '--rate=$rate',                     // 形如 +20% / -10%
+  '--pitch=$pitchStr',                // 形如 +5Hz
+  '--volume=$volumeStr',
+  '--ssml-base64',
+]);
+final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
+```
 
-- [ ] `cd apps && flutter create --platforms=macos,windows --org com.sayit sayit_app`
-- [ ] 把 PoC 阶段的 `lib/main.dart`、`pubspec.yaml` 等覆盖到生成位置（保留 macos/、windows/ 子目录）
-- [ ] 在 `pubspec.yaml` 添加：
-  ```yaml
-  dependencies:
-    flutter_rust_bridge: ^2.0
-    riverpod: ^2.5
-  dev_dependencies:
-  flutter_rust_bridge_codegen: ^2.0
-  build_runner: ^2.4
-  ```
-- [ ] `flutter pub get`
+可执行文件由 `_pocBinaryCandidates()` 按平台给出一组候选路径依次查找
+（macOS 看 `Resources/bin/`、`MacOS/`、`Frameworks/`；Windows 看 `exeDir\bin\`、`exeDir\`；
+Linux 看 `exeDir/`、`exeDir/lib/`、`exeDir/bin/`）。找不到会在界面上报出已查找的全部路径。
 
-## 3. 桥接生成
+## 已经删掉的东西
 
-- [ ] 在 `apps/sayit_app` 根执行 `dart run flutter_rust_bridge_codegen build`
-- [ ] 确认 `lib/src/rust/` 下生成了 `api.dart`、`io.dart`
-- [ ] 在 `lib/main.dart` import 桥接代码：
-  ```dart
-  import 'src/rust/api.dart';
-  ```
+- `lib/src/rust/frb_generated.dart` / `.io.dart` / `.web.dart`
+- `sayit-poc/crates/sayit-ffi/`（整个 crate）与 `sayit-poc/bridge.yaml`
+- `pubspec.yaml` 里的 `flutter_rust_bridge` / `ffi` / `riverpod` 依赖，
+  以及 `ffigen` / `build_runner` 这两个 dev 依赖
 
-## 4. UI 接入
+## 这个方案的取舍
 
-- [ ] 文本输入区（`TextField` + 导入 .txt 按钮）
-- [ ] 语音选择 `DropdownButton`
-- [ ] "生成并播放"按钮 → `sayitEdge.synthesize(...)`
-- [ ] 播放区 + 逐句高亮
-- [ ] WAV 导出按钮
+**换来的：**
 
-## 5. 不在 1b 范围
+- Rust 端可以完全脱离 Flutter 单独开发与调试：`cargo run -p sayit-poc-bin -- --case all`
+  就能跑全部用例，不需要先编译 Flutter 工程。
+- 不用维护一份**要提交进仓库的生成代码**。FRB 的 `frb_generated.*` 是产物，
+  但必须提交，一旦 Rust 端签名变了而忘了重新生成，两边就静默不一致。
+- 依赖树小很多，不涉及 `ffi` 的 ABI 与平台动态库打包问题。
+- 音频是字节流，本来就要跨语言搬运；走 stdout 的 base64 和走 FFI 没有本质区别，
+  但省掉了一层桥接代码。
 
-- 存储层（drift）→ 1c
-- MP3 兜底（symphonia/minimp3）→ 1b 末或 2 初
-- 性能调优 → 3
+**代价：**
 
-## 6. 退出标准
+- 每次合成要 spawn 一个进程（进程创建开销，本机桌面场景可忽略）。
+- 通信靠 JSON + base64，有编解码开销；文本量大时命令行参数长度受系统限制
+  （Windows 上限约 32K 字符），所以走的是 base64 参数而非原始文本。
+- 打包时必须把 `sayit-poc` 一起放进 bundle，且路径要对得上 —— 这是当前最脆弱的一环。
 
-- [ ] 粘贴一段 1KB 中文 → 点击生成 → 听到语音 → 文本按句高亮 → 导出 WAV 可播放
-- [ ] `cargo clippy --workspace -- -D warnings` 零警告
-- [ ] `flutter analyze` 零错误
+## 如果以后要改回 FRB
+
+需要重新引入 `flutter_rust_bridge` / `ffi`、重建 `sayit-ffi` crate、重新生成
+`lib/src/rust/`，并把打包流程改成链接动态库。这是新需求，不是 bug 修复。
+
+## 顺带：音频格式也是被库限死的
+
+edge_tts 的输出格式在其 `Communicate.__init__` 里写死为
+`audio-24khz-48kbitrate-mono-mp3`，没有 `output_format` 参数。
+所以：
+
+- 拿不到 PCM，导出只能是 MP3；
+- 想插句间静音就得 MP3 解码 → 拼 PCM → 重编码，本项目栈内没有 MP3 编码器，
+  因此**句间停顿功能已整体移除**；
+- 逐句高亮的时间轴按已写入字节数 ÷ 6 换算毫秒（48 kbps = 6000 字节/秒），精确不漂移。

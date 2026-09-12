@@ -1,5 +1,5 @@
 [toolchain]
-# PoC 阶段使用 stable；1b 接入 flutter_rust_bridge 时评估是否需要 nightly
+# 使用 stable。Dart 与 Rust 通过 sayit-poc 子进程通信，不依赖 nightly 特性。
 channel = "stable"
 components = ["rustfmt", "clippy"]
 profile = "minimal"

@@ -1,28 +1,62 @@
-# SayIt （说吧）
+# SayIt（说吧）
 
-> 本地桌面文本转语音（TTS）工具，支持多语种、多音色
+> 本地桌面文本转语音（TTS）工具，支持多语种、多音色、逐句高亮。
+> 调用 Microsoft Edge 的在线 TTS 服务，合成过程在本机完成，不经过第三方服务器中转。
+
+| 平台 | 构建 |
+|------|------|
+| macOS / Windows / Linux | ![Build](https://github.com/MagicianEW/SayIt/actions/workflows/build.yml/badge.svg) |
 
 ## 功能特点
 
 - **多语种支持**：支持 37+ 种语言，包括中文（简体/粤语/台语）、英语、日语、韩语等
 - **多音色选择**：多种音色可选，支持按语种和性别筛选
 - **参数可调**：可调节语速、音高、音量
-- **逐句播放**：文本分句播放，音频拼接无损
-- **导出功能**：支持导出 MP3 格式音频
+- **逐句播放**：文本分句播放，逐句高亮不漂移
+- **导出功能**：支持导出 MP3（24kHz / 48kbps / 单声道），文件名格式 `序号_前10个字.mp3`
 - **设定导入导出**：可保存和恢复音色、语速等偏好设置
 
-## 构建状态
+## 架构
 
-| 平台 | 状态 |
-|------|------|
-| Windows | ![Build](https://github.com/MagicianEW/SayIt/actions/workflows/build.yml/badge.svg) |
-| macOS | ![Build](https://github.com/MagicianEW/SayIt/actions/workflows/build.yml/badge.svg) |
+```
+┌──────────────┐  Process.run  ┌───────────────────┐  spawn  ┌────────────────┐
+│  Flutter UI  │ ────────────▶ │  sayit-poc (Rust) │ ──────▶ │ Python edge_tts│
+│    (Dart)    │ ◀──────────── │   独立可执行程序    │ ◀────── │                │
+└──────────────┘  stdout JSON  └───────────────────┘ MP3 字节 └────────────────┘
+```
 
-## 技术栈
+- **Dart 与 Rust 之间不用 `flutter_rust_bridge`**，而是由 Dart 用 `Process.run` 调起
+  独立可执行程序 `sayit-poc`，Rust 把结果以 JSON 打到 stdout。这样 Rust 端可以脱离
+  Flutter 单独调试，也不用维护一份要提交进仓库的桥接生成码。
+  完整取舍见 [`apps/sayit_app/notes.md`](./apps/sayit_app/notes.md)。
+- Rust workspace 三个 crate：
+  - `sayit-drm` —— Edge TTS 的 DRM Token 生成
+  - `sayit-edge` —— WebSocket 客户端，并负责调起 Python 侧的 `edge_tts`
+  - `sayit-poc-bin` —— 命令行入口，产物即 `sayit-poc`
+- Python 解释器的查找顺序：`SAYIT_PYTHON` 环境变量 → `~/.sayit-venv` → `python` → `python3`。
+- 音频格式被 `edge_tts` 限死：其 `Communicate.__init__` 里写死了 MP3 输出，
+  没有 `output_format` 参数，**拿不到 PCM**。所以合成与导出都直接拼接 MP3 字节，
+  逐句高亮的时间轴按已写入字节数 ÷ 6 换算毫秒（48 kbps = 6000 字节/秒），精确不漂移。
 
-- **前端**：Flutter (Dart)
-- **后端**：Rust
-- **TTS 引擎**：Microsoft Edge TTS
+## 目录结构
+
+```
+SayIt/
+├── VERSION                  ← 版本号唯一来源（不要手改各平台文件）
+├── scripts/
+│   ├── sync_version.py      ← VERSION → pubspec.yaml / Cargo.toml / build_info.dart
+│   └── sync_app_name.py     ← 应用名 → 9 个平台元数据文件
+├── apps/sayit_app/          ← Flutter 桌面前端
+│   ├── lib/                 ← UI、分句、播放、导出
+│   ├── test/                ← 分句规则回归测试
+│   ├── macos/  windows/     ← 平台壳（已随仓库提交）
+│   └── linux/               ← 未提交，由 CI 现场生成
+└── sayit-poc/               ← Rust workspace
+    └── crates/
+        ├── sayit-drm/       ← Edge DRM Token
+        ├── sayit-edge/      ← WebSocket 客户端 + 调用 Python edge_tts
+        └── sayit-poc-bin/   ← 命令行入口（产物 sayit-poc）
+```
 
 ## 下载
 
@@ -72,6 +106,72 @@ python3 -c "import edge_tts; print('edge_tts OK')"
 ```bash
 export SAYIT_PYTHON=/path/to/your/python3
 ```
+
+## 命名与版本
+
+**应用名**：英文 `SayIt`，中文「说吧」。
+
+- 英文名用于技术标识：可执行文件名、CMake 工程名、macOS 的 `CFBundleName`、
+  Windows 文件属性里的产品名。
+- 中文名用于面向用户的显示：Windows 窗口标题、界面标题、
+  macOS 的 `CFBundleDisplayName`。
+
+两个名字和各平台的版本号都**由脚本统一同步，不要手改各平台文件**
+（改了会被脚本覆盖）：
+
+| 用途 | 单一来源 | 同步命令 |
+|------|----------|----------|
+| 应用名 | `scripts/sync_app_name.py` 顶部的 `EN_NAME` / `ZH_NAME` | `python3 scripts/sync_app_name.py` |
+| 版本号 | 仓库根目录的 `VERSION` 文件 | `python3 scripts/sync_version.py` |
+
+`sync_version.py` 把 `VERSION` 写进 `apps/sayit_app/pubspec.yaml` 和
+`sayit-poc/Cargo.toml`，并生成 `apps/sayit_app/lib/src/build_info.dart`
+供界面显示版本号。Flutter 工具链再据此生成 macOS `Info.plist` 和 Windows
+exe 的版本资源；`sayit-poc --version` 读的也是同一个值。
+
+改版本号：
+
+```bash
+# 直接改 VERSION 文件后同步
+python3 scripts/sync_version.py
+
+# 或一条命令搞定
+python3 scripts/sync_version.py --set 0.2.0
+
+# 校验各处是否一致（提交前 / CI 检查用）
+python3 scripts/sync_version.py --check
+python3 scripts/sync_app_name.py --check
+```
+
+> Linux 的 `linux/` 目录没有提交进仓库，由 CI 在构建时用 `flutter create`
+> 生成，生成后立刻调用 `sync_app_name.py` 同步名字。
+
+## 发版流程
+
+CI 由 **`release: published`** 触发 —— **不是** tag 推送触发。必须先在 GitHub 上
+发布一个 Release，构建任务才会启动，完成后把产物回传到同一个 Release。
+
+```bash
+# 1. 定版本号并同步
+python3 scripts/sync_version.py --set 0.1.4
+python3 scripts/sync_version.py --check
+python3 scripts/sync_app_name.py --check
+git add -A && git commit -m "chore: bump version to 0.1.4"
+git push origin main
+
+# 2. 发布 Release（这一步会创建 tag v0.1.4 并触发构建）
+gh release create v0.1.4 --title "SayIt v0.1.4" --generate-notes
+```
+
+要点：
+
+- Release 必须是**已发布**状态才触发，存草稿不会触发。
+- 构建时 CI 会把 tag 里的版本号（去掉 `v` 前缀）写回 `VERSION` 再重新同步一遍，
+  所以**产物文件名、打包进二进制的版本资源、`sayit-poc --version` 三者始终一致**。
+- 三个平台并行构建，全部成功后 `release` job 才把 `.dmg` / `.zip` / `.tar.gz`
+  上传到该 Release。构建产物同时保留为 Actions artifact，14 天有效。
+- 想只做一次测试构建、不发布，用 `workflow_dispatch` 手动触发（可指定版本号，
+  留空则用仓库 `VERSION` 里的值）。
 
 ## macOS 安装说明
 

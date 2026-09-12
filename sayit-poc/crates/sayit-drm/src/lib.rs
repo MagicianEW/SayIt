@@ -44,6 +44,15 @@ pub enum DrmError {
     SystemTimeError,
 }
 
+/// 直接设置时钟偏差（秒），覆盖旧值。
+///
+/// 累加式的 [`adj_clock_skew_seconds`] 无法把偏移量归零，
+/// 测试与「服务端一次校准到位」的场景需要这个绝对版本。
+pub fn set_clock_skew_seconds(skew_seconds: f64) {
+    let nanos = (skew_seconds * 1e9) as i64;
+    CLOCK_SKEW_NANOS.store(nanos, Ordering::SeqCst);
+}
+
 /// 调整时钟偏差（秒）。调用方在收到服务端 `Date` header 后调用。
 ///
 /// 上游在 401/403 后会读服务端 `Date`，算出 `server_date - client_date` 作为 skew。
@@ -52,15 +61,21 @@ pub fn adj_clock_skew_seconds(skew_seconds: f64) {
     CLOCK_SKEW_NANOS.fetch_add(nanos, Ordering::SeqCst);
 }
 
-/// 获取当前 Unix 时间戳（含 skew 校准）。
-pub fn get_unix_timestamp() -> f64 {
-    let ms = SystemTime::now()
+/// 获取**未经 skew 校准**的当前 Unix 时间戳（秒）。
+///
+/// 需要与目标时间对齐时用它算差值，避免"读到的时间已含旧 skew"的套娃问题。
+pub fn now_unix_seconds() -> f64 {
+    SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis();
-    let base_seconds = ms as f64 / 1000.0;
+        .as_millis() as f64
+        / 1000.0
+}
+
+/// 获取当前 Unix 时间戳（含 skew 校准）。
+pub fn get_unix_timestamp() -> f64 {
     let skew_seconds = CLOCK_SKEW_NANOS.load(Ordering::SeqCst) as f64 / 1e9;
-    base_seconds + skew_seconds
+    now_unix_seconds() + skew_seconds
 }
 
 /// 生成 Sec-MS-GEC Token。
@@ -137,6 +152,23 @@ pub fn generate_muid() -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Mutex, MutexGuard};
+
+    /// `CLOCK_SKEW_NANOS` 是**进程级全局**状态，而 `cargo test` 默认多线程并行执行。
+    /// 任何会改动它的测试都必须先抢这把锁，否则互相污染 → 随机失败。
+    static SKEW_LOCK: Mutex<()> = Mutex::new(());
+
+    /// 抢锁并**把 skew 归零**，返回一个 guard；测试结束自动释放。
+    fn skew_guard() -> MutexGuard<'static, ()> {
+        let guard = SKEW_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        set_clock_skew_seconds(0.0);
+        guard
+    }
+
+    /// 把"当前时间"对齐到目标 Unix 时间戳（绝对设置，不累加）。
+    fn freeze_at(target_unix: f64) {
+        set_clock_skew_seconds(target_unix - now_unix_seconds());
+    }
 
     #[test]
     fn token_is_64_hex_uppercase() {
@@ -147,11 +179,12 @@ mod tests {
 
     #[test]
     fn token_changes_after_clock_skew() {
+        let _g = skew_guard();
         let a = generate_sec_ms_gec();
         adj_clock_skew_seconds(3600.0); // +1 小时
         let b = generate_sec_ms_gec();
         assert_ne!(a, b);
-        adj_clock_skew_seconds(-3600.0); // 撤销
+        set_clock_skew_seconds(0.0); // 撤销
     }
 
     #[test]
@@ -170,11 +203,12 @@ mod tests {
     fn token_changes_after_clock_skew_jumps_window() {
         // +3700 秒（略多于一小时），不是 300（5分钟）的整数倍
         // 这样无论当前时间在窗口的哪个位置，skew 后都会落在不同窗口
+        let _g = skew_guard();
         let before = generate_sec_ms_gec();
-        super::adj_clock_skew_seconds(3700.0);
+        adj_clock_skew_seconds(3700.0);
         let after = generate_sec_ms_gec();
-        super::adj_clock_skew_seconds(-3700.0); // 撤销
         assert_ne!(before, after);
+        set_clock_skew_seconds(0.0); // 撤销
     }
 
     #[test]
@@ -185,69 +219,74 @@ mod tests {
     }
 
     #[test]
+    fn muid_is_not_all_zero_tail() {
+        // 后段全 0 的 MUID 会被服务端 403（见 generate_muid 文档）
+        let m = generate_muid();
+        assert_ne!(&m[16..], "0000000000000000");
+        assert_ne!(m, "0".repeat(32));
+    }
+
+    #[test]
     fn trusted_client_token_constant() {
         assert_eq!(TRUSTED_CLIENT_TOKEN, "6A5AA1D4EAFF4E9FB37E23D68491D6F4");
     }
 
     #[test]
     fn gold_vector_same_window() {
-        // 直接验证 Python 参考实现确认的 gold vector
+        // Python 参考实现确认的 gold vector：
         // 1704067200.0 + 11644473600 = 13348540800
         // 13348540800 % 300 = 0（同窗口）
         // ticks_100ns = 13348540800 * 1e9 / 100 = 133485408000000000
         // token = SHA256("1334854080000000006A5AA1D4EAFF4E9FB37E23D68491D6F4")
         //       = "2AC0A57C1214B9458F8725BB7800499BB594EC29DDA83424BC14661707141F2F"
-
-        adj_clock_skew_seconds(-get_unix_timestamp());
-        let target = 1704067200.0;
-        adj_clock_skew_seconds(target - get_unix_timestamp());
+        let _g = skew_guard();
+        freeze_at(1704067200.0);
         let token = generate_sec_ms_gec();
 
         assert_eq!(
             token, "2AC0A57C1214B9458F8725BB7800499BB594EC29DDA83424BC14661707141F2F",
             "Gold vector 验证失败"
         );
-
-        // 撤销
-        adj_clock_skew_seconds(-target);
+        set_clock_skew_seconds(0.0);
     }
 
     #[test]
     fn gold_vector_cross_window() {
-        // 1704067200.0 和 1704067500.0 跨 5 分钟窗口
-        // 1704067200 + 11644473600 = 13348540800 → %300 = 0
-        // 1704067500 + 11644473600 = 13348541100 → %300 = 100 (NOT same window!)
-        // 等等，让我验证...
-
-        adj_clock_skew_seconds(-get_unix_timestamp());
-        adj_clock_skew_seconds(1704067200.0 - get_unix_timestamp());
+        // 1704067200 → %300 = 0；+300 秒后跨到下一个 5 分钟窗口
+        let _g = skew_guard();
+        freeze_at(1704067200.0);
         let token1 = generate_sec_ms_gec();
-        adj_clock_skew_seconds(300.0);
+        freeze_at(1704067500.0);
         let token2 = generate_sec_ms_gec();
 
         assert_ne!(token1, token2, "跨 5 分钟窗口 token 应不同");
-
-        // 撤销
-        adj_clock_skew_seconds(-1704067200.0 - 300.0);
+        set_clock_skew_seconds(0.0);
     }
 
     #[test]
     fn ticks_100ns_calculation() {
-        // 验证 tick 计算：
+        // 纯算术验证，不碰全局 skew（以前依赖"把时间重置到 0"，两次调用只要跨 1ms
+        // 就会多出 10000 ticks，断言必然失败）。
         // 1 秒 = 10_000_000 ticks (100ns each)
-        // ticks_100ns = unix_seconds * 10_000_000
-        // 例如：1 秒 → 10_000_000 ticks
-        //       0.5 秒 → 5_000_000 ticks
-        adj_clock_skew_seconds(-get_unix_timestamp()); // 重置到 0
-        let ts = get_unix_timestamp(); // 现在应该是 ~0
-        let ticks = ts + WIN_EPOCH_SECONDS as f64;
-        let expected = ticks * 1e9 / 100.0;
-        // WIN_EPOCH + 0 秒 = WIN_EPOCH * 10_000_000 ticks
+        // 整数秒：先乘 1e9 再除 100 与直接乘 1e7 在位上都精确相等
+        for unix_seconds in [0u64, 1, 1704067200] {
+            let ticks = unix_seconds as f64 + WIN_EPOCH_SECONDS as f64;
+            let expected = ticks * 1e9 / 100.0;
+            let want = (WIN_EPOCH_SECONDS + unix_seconds) as f64 * 10_000_000.0;
+            assert_eq!(expected, want, "tick 换算在 {unix_seconds}s 处不一致");
+        }
         assert_eq!(
-            expected as u64, WIN_EPOCH_SECONDS * 10_000_000,
-            "tick 计算基础验证失败"
+            (WIN_EPOCH_SECONDS as f64 * 1e9 / 100.0) as u64,
+            WIN_EPOCH_SECONDS * 10_000_000
         );
-        // 撤销 skew
-        adj_clock_skew_seconds(get_unix_timestamp());
+
+        // 非整数秒：(WIN_EPOCH + 0.5) * 1e7 = 116444736005000000 ticks。
+        // 浮点先乘 1e9 再除 100 会有 ULP 级别的误差，用容差比较。
+        let ticks = 0.5 + WIN_EPOCH_SECONDS as f64;
+        let expected = ticks * 1e9 / 100.0;
+        assert!(
+            (expected - 116_444_736_005_000_000.0).abs() < 1.0,
+            "0.5s 应换算为 116444736005000000 ticks，实际 {expected}"
+        );
     }
 }

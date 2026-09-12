@@ -9,9 +9,9 @@
 //!
 //! ## 协议
 //!
-//! Python 脚本接收 JSON stdin：`{"text": "...", "voice": "...", "output_format": "..."}`
+//! Python 脚本接收 JSON stdin：`{"text": "...", "voice": "...", ...}`
 //! Python 脚本通过 stdout 流式输出两行：
-//! - `AUDIO <base64>`：一段 PCM/MP3 字节
+//! - `AUDIO <base64>`：一段 MP3 字节（edge_tts 输出格式固定，见 [`EDGE_OUTPUT_FORMAT`]）
 //! - `META <json>`：WordBoundary / SentenceBoundary / Format 事件
 //! - `DONE`：结束
 //! - `ERROR <msg>`：错误
@@ -70,10 +70,14 @@ pub struct SynthesizeRequest {
 }
 
 /// Edge TTS 配置（PoC 子集）。
+///
+/// 注意：**没有** `output_format` 字段。edge_tts 6.x / 7.x 的 `Communicate`
+/// 不接受该参数，输出格式恒为 `audio-24khz-48kbitrate-mono-mp3`（见
+/// [`EDGE_OUTPUT_FORMAT`]）。以前这里存了一个"期望格式"，既没传给 Python，
+/// 又被当成真实格式上报给 Dart，导致元数据撒谎。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EdgeConfig {
     pub voice: String,
-    pub output_format: String,
     pub pitch: String,
     pub rate: String,
     pub volume: String,
@@ -83,7 +87,6 @@ impl Default for EdgeConfig {
     fn default() -> Self {
         Self {
             voice: "zh-CN-XiaoxiaoNeural".to_string(),
-            output_format: "raw-16khz-16bit-mono-pcm".to_string(),
             pitch: "+0Hz".to_string(),
             rate: "+0%".to_string(),
             volume: "+0%".to_string(),
@@ -91,12 +94,65 @@ impl Default for EdgeConfig {
     }
 }
 
-/// 输出格式常量
-pub const OUTPUT_FORMAT_PCM_16K: &str = "raw-16khz-16bit-mono-pcm";
-pub const OUTPUT_FORMAT_MP3_24K_48K: &str = "audio-24khz-48kbitrate-mono-mp3";
+/// edge_tts 唯一支持的输出格式（不可配置）。
+pub const EDGE_OUTPUT_FORMAT: &str = "audio-24khz-48kbitrate-mono-mp3";
+
+/// 与 [`EDGE_OUTPUT_FORMAT`] 对应的采样率。
+pub const EDGE_SAMPLE_RATE: u32 = 24_000;
+
+/// 与 [`EDGE_OUTPUT_FORMAT`] 对应的码率（bit/s），用于按字节数精确换算音频时长。
+pub const EDGE_BITRATE_BPS: u32 = 48_000;
 
 /// 合成超时时间（秒）
 const SYNTH_TIMEOUT_SECS: u64 = 60;
+
+/// 语音列表超时时间（秒）
+const LIST_VOICES_TIMEOUT_SECS: u64 = 60;
+
+/// 解析可用的 Python 解释器路径。
+///
+/// 优先级：
+/// 1. 环境变量 `SAYIT_PYTHON`（用户显式指定）
+/// 2. `~/.sayit-venv` 虚拟环境（Unix: `bin/python3|python`；Windows: `Scripts\python.exe`）
+/// 3. PATH 上的 `python3`（Unix）/ `python`（Windows）
+///
+/// 注意：Windows 默认**没有** `python3.exe`，也**不设** `HOME`（只有 `USERPROFILE`），
+/// 因此两者都要兜底，否则 Windows 上永远找不到解释器。
+pub fn resolve_python_path() -> String {
+    if let Ok(p) = std::env::var("SAYIT_PYTHON") {
+        let p = p.trim().to_string();
+        if !p.is_empty() {
+            return p;
+        }
+    }
+
+    let home = std::env::var("HOME")
+        .or_else(|_| std::env::var("USERPROFILE"))
+        .unwrap_or_default();
+
+    if !home.is_empty() {
+        let venv = std::path::Path::new(&home).join(".sayit-venv");
+        let candidates: Vec<std::path::PathBuf> = if cfg!(windows) {
+            vec![
+                venv.join("Scripts").join("python.exe"),
+                venv.join("bin").join("python.exe"),
+            ]
+        } else {
+            vec![venv.join("bin").join("python3"), venv.join("bin").join("python")]
+        };
+        for c in candidates {
+            if c.is_file() {
+                return c.to_string_lossy().to_string();
+            }
+        }
+    }
+
+    if cfg!(windows) {
+        "python".to_string()
+    } else {
+        "python3".to_string()
+    }
+}
 
 /// 一次合成调用的完整返回。
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -139,6 +195,7 @@ struct MetaFrame {
     offset: u64,
     #[serde(default)]
     duration: u64,
+    #[serde(default)]
     length: Option<usize>,
     /// 首条 META 报告的格式信息（Format 事件）
     sample_rate: Option<u32>,
@@ -151,9 +208,13 @@ pub struct EdgeClient {
 }
 
 impl EdgeClient {
+    /// 使用 [`resolve_python_path`] 自动探测解释器。
+    ///
+    /// 以前这里硬编码 `"python3"`，导致 Windows（无 `python3.exe`）与
+    /// 使用 `SAYIT_PYTHON` / venv 的场景全部失效。
     pub fn new() -> Self {
         Self {
-            python_path: "python3".to_string(),
+            python_path: resolve_python_path(),
         }
     }
 
@@ -166,18 +227,9 @@ impl EdgeClient {
     /// 检查 Python 环境是否可用（python3 和 edge_tts 模块）。
     /// 如果不可用，返回包含清晰错误信息的 Err。
     pub fn check_python_env() -> Result<String, String> {
-        let python_path = std::env::var("SAYIT_PYTHON")
-            .unwrap_or_else(|_| {
-                let home = std::env::var("HOME").unwrap_or_default();
-                let venv_py = format!("{home}/.sayit-venv/bin/python3");
-                if std::path::Path::new(&venv_py).exists() {
-                    venv_py
-                } else {
-                    "python3".to_string()
-                }
-            });
+        let python_path = resolve_python_path();
 
-        // 检查 python3 是否存在
+        // 检查 python 是否存在
         let python_check = std::process::Command::new(&python_path)
             .args(["-c", "import sys; print(sys.version_info[0])"])
             .output();
@@ -206,10 +258,11 @@ impl EdgeClient {
             Ok(_) | Err(_) => {
                 Err(format!(
                     "Python '{}' 已安装，但 edge_tts 模块未安装。\n\
-                    请运行: pip install edge_tts\n\
+                    请运行: \"{}\" -m pip install edge_tts\n\
                     或创建虚拟环境:\n\
-                    python3 -m venv ~/.sayit-venv && ~/.sayit-venv/bin/pip install edge_tts",
-                    python_path
+                    \"{}\" -m venv ~/.sayit-venv && ~/.sayit-venv/bin/pip install edge_tts\n\
+                    （Windows: %USERPROFILE%\\.sayit-venv\\Scripts\\pip.exe install edge_tts）",
+                    python_path, python_path, python_path
                 ))
             }
         }
@@ -226,7 +279,6 @@ impl EdgeClient {
             .arg("-c")
             .arg(script)
             .arg(req.config.voice.clone())
-            .arg(req.config.output_format.clone())
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -284,13 +336,16 @@ impl EdgeClient {
                                 }
                             }
                         } else if meta.kind == "WordBoundary" || meta.kind == "SentenceBoundary" {
-                            // edge-tts offset is in 100ns units (audio timing), not text.
-                            // We preserve audio_offset_ms for audio-aligned use (sentence
-                            // highlighting). text_offset is left as 0 here — the Dart layer
-                            // performs the SSML→plain-text offset mapping when needed.
+                            // edge-tts 的 offset 是 100ns 单位的**音频**时间轴，不是文本偏移。
+                            // audio_offset_ms 用于音频对齐（逐句高亮）。
+                            //
+                            // text_offset 恒为 0：Edge 的 WordBoundary 事件只给音频偏移，
+                            // 不提供在纯文本中的字符下标，这里无法凭空算出。调用方不应依赖它。
+                            // text_length 若上游没给，退化为 boundary 文本本身的字符数。
                             boundaries.push(Boundary {
                                 text_offset: 0,
-                                text_length: meta.length.unwrap_or(0),
+                                text_length: meta.length
+                                    .unwrap_or_else(|| meta.text.chars().count()),
                                 audio_offset_ms: (meta.offset as f64) / 10_000.0,
                                 duration_ms: (meta.duration as f64) / 10_000.0,
                                 text: meta.text,
@@ -315,19 +370,30 @@ impl EdgeClient {
             }
         };
 
-        let (read_result, _, process_status) = tokio::join!(
-            timeout(Duration::from_secs(SYNTH_TIMEOUT_SECS), read_task),
-            stderr_drain_task,
-            child.wait()
-        );
+        // 注意：不能把 child.wait() 单独放进 tokio::join! 里再对 read_task 做 timeout。
+        // tokio::join! 要等**所有** future 完成，若子进程挂死 child.wait() 永不返回，
+        // 那 timeout 根本没机会触发。必须把「读 + 等」整体包进同一个 timeout。
+        // 先在一个独立语句里 await 完，让 `child.wait()` / 各读取闭包的可变借用**先释放**，
+        // 否则后面的 child.kill() 会与仍在作用域内的借用冲突（E0502）。
+        // 注意：tokio::join! 是宏，会**当场** await，本身不是 Future，
+        // 不能直接塞给 timeout()，必须包一层 async {}。
+        let outcome = timeout(
+            Duration::from_secs(SYNTH_TIMEOUT_SECS),
+            async { tokio::join!(read_task, stderr_drain_task, child.wait()) },
+        )
+        .await;
 
-        let read_ok = read_result.is_ok();
-        if !read_ok {
-            let _ = child.kill().await;
-            return Err(EdgeError::StdoutRead("synthesis timed out".to_string()));
-        }
+        let (read_result, _, process_status) = match outcome {
+            Ok(v) => v,
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(EdgeError::StdoutRead(format!(
+                    "synthesis timed out after {SYNTH_TIMEOUT_SECS}s"
+                )));
+            }
+        };
 
-        read_result.map_err(|_| EdgeError::StdoutRead("synthesis timed out".to_string()))??;
+        read_result?;
 
         let status = process_status?;
         if !status.success() {
@@ -374,24 +440,46 @@ impl EdgeClient {
         let mut reader = BufReader::new(stdout).lines();
         let mut voices = Vec::new();
 
-        while let Some(line) = reader.next_line().await
-            .map_err(|e| EdgeError::StdoutRead(e.to_string()))?
-        {
-            if line.starts_with("VOICE ") {
-                if let Some(json) = line.strip_prefix("VOICE ") {
-                    let voice: Voice = serde_json::from_str(json)
-                        .map_err(|e| EdgeError::Protocol(format!("voice json: {e}")))?;
-                    voices.push(voice);
+        let read_task = async {
+            while let Some(line) = reader.next_line().await
+                .map_err(|e| EdgeError::StdoutRead(e.to_string()))?
+            {
+                if line.starts_with("VOICE ") {
+                    if let Some(json) = line.strip_prefix("VOICE ") {
+                        let voice: Voice = serde_json::from_str(json)
+                            .map_err(|e| EdgeError::Protocol(format!("voice json: {e}")))?;
+                        voices.push(voice);
+                    }
+                } else if line.starts_with("ERROR ") {
+                    let err = line.strip_prefix("ERROR ").unwrap_or(&line);
+                    return Err(EdgeError::Remote(err.to_string()));
                 }
-            } else if line.starts_with("ERROR ") {
-                let err = line.strip_prefix("ERROR ").unwrap_or(&line);
-                return Err(EdgeError::Remote(err.to_string()));
             }
-        }
+            Ok::<(), EdgeError>(())
+        };
 
-        let status = child.wait().await?;
-        if !status.success() {
-            return Err(EdgeError::NonZeroExit(status.code().unwrap_or(-1)));
+        // 与 synthesize 同理：timeout 必须包住「读 + 等」，否则子进程挂死时永远返回不了。
+        // 同样先在一个独立语句 await，避免 Child 的可变借用跨越到 kill() 处。
+        let outcome = timeout(
+            Duration::from_secs(LIST_VOICES_TIMEOUT_SECS),
+            async { tokio::join!(read_task, child.wait()) },
+        )
+        .await;
+
+        match outcome {
+            Ok((read_result, status_result)) => {
+                read_result?;
+                let status = status_result?;
+                if !status.success() {
+                    return Err(EdgeError::NonZeroExit(status.code().unwrap_or(-1)));
+                }
+            }
+            Err(_) => {
+                let _ = child.kill().await;
+                return Err(EdgeError::StdoutRead(format!(
+                    "list_voices timed out after {LIST_VOICES_TIMEOUT_SECS}s"
+                )));
+            }
         }
 
         Ok(voices)
@@ -404,14 +492,10 @@ impl Default for EdgeClient {
     }
 }
 
-/// 同步封装：供 flutter_rust_bridge 调用。
-///
-/// Flutter/Dart 端无法直接调用 async 函数，这里用 tokio::runtime::Runtime::block_on 适配。
-#[flutter_rust_bridge::frb(sync)]
+/// 同步封装：内部自建 tokio runtime 并 block_on，方便在非 async 上下文调用。
 pub fn synthesize_sync(
     ssml: String,
     voice: String,
-    output_format: String,
     pitch: String,
     rate: String,
     volume: String,
@@ -421,7 +505,6 @@ pub fn synthesize_sync(
         ssml,
         config: EdgeConfig {
             voice,
-            output_format,
             pitch,
             rate,
             volume,
@@ -435,7 +518,6 @@ pub fn synthesize_sync(
 }
 
 /// 同步封装：获取可用语音列表。
-#[flutter_rust_bridge::frb(sync)]
 pub fn list_voices_sync() -> Result<Vec<Voice>, String> {
     let client = EdgeClient::new();
     let rt = tokio::runtime::Runtime::new()
@@ -450,46 +532,45 @@ import sys
 import asyncio
 import json
 import base64
-import re
 import edge_tts
 
-def strip_ssml(ssml: str) -> str:
-    text = re.sub(r"<[^>]+>", "", ssml)
-    text = text.replace("&lt;", "<").replace("&gt;", ">").replace("&amp;", "&")
-    text = text.replace("&quot;", '"').replace("&apos;", "'")
-    return text.strip()
-
-def parse_output_format(fmt: str):
-    """从 output_format 字符串解析采样率和格式名。"""
-    fmt_lower = fmt.lower()
-    if "16khz" in fmt_lower or "pcm" in fmt_lower:
-        return 16000, "pcm"
-    else:
-        # audio-24khz-48kbitrate-mono-mp3 及类似
-        return 24000, "mp3"
+# edge_tts 的输出格式是**固定的**，不可配置（见 Communicate 注释）。
+# 这两个常量必须与 edge_tts 内部写死的 outputFormat 保持一致，
+# 否则上报给 Rust/Dart 的采样率就是假的（以前就是这样被骗过去的）。
+FIXED_SAMPLE_RATE = 24000
+FIXED_FORMAT = "mp3"
 
 async def main():
     voice = sys.argv[1]
-    output_format = sys.argv[2]
-    sample_rate, fmt_name = parse_output_format(output_format)
 
     # 立即发送 Format 元数据，Rust 层需此信息来正确解读音频
     format_meta = {
         "type": "Format",
-        "sample_rate": sample_rate,
-        "format": fmt_name,
+        "sample_rate": FIXED_SAMPLE_RATE,
+        "format": FIXED_FORMAT,
     }
     sys.stdout.write("META " + json.dumps(format_meta) + "\n")
     sys.stdout.flush()
 
     raw = sys.stdin.readline()
-    req = json.loads(raw)
-    ssml_or_text = req["ssml"]
+    if not raw or not raw.strip():
+        print("ERROR empty request on stdin", flush=True)
+        sys.exit(1)
+    try:
+        req = json.loads(raw)
+    except Exception as e:
+        print(f"ERROR bad request json: {e}", flush=True)
+        sys.exit(1)
+
+    ssml_or_text = req.get("ssml", "")
     rate = req.get("rate", "+0%")
     pitch = req.get("pitch", "+0Hz")
     volume = req.get("volume", "+0%")
 
     try:
+        # 重要：edge_tts 6.x / 7.x 的 Communicate **没有** output_format 参数
+        # （7.x 在 communicate.py 里把 "outputFormat":"audio-24khz-48kbitrate-mono-mp3"
+        #  写死）。传这个关键字会直接 TypeError。输出格式不可配置，只能如实上报。
         comm = edge_tts.Communicate(
             ssml_or_text,
             voice=voice,
@@ -560,8 +641,17 @@ mod tests {
 
     #[test]
     fn default_python_path() {
+        // 不比对具体值（可能命中 SAYIT_PYTHON 或 ~/.sayit-venv），
+        // 只保证一定解析出一个 python 解释器而不是硬编码失败。
         let c = EdgeClient::new();
-        assert_eq!(c.python_path, "python3");
+        assert!(!c.python_path.trim().is_empty());
+        assert!(c.python_path.to_lowercase().contains("python"));
+    }
+
+    #[test]
+    fn resolve_python_path_is_never_empty() {
+        let p = resolve_python_path();
+        assert!(!p.trim().is_empty());
     }
 
     #[test]
@@ -572,15 +662,19 @@ mod tests {
 
     #[test]
     fn output_format_constants() {
-        assert_eq!(OUTPUT_FORMAT_PCM_16K, "raw-16khz-16bit-mono-pcm");
-        assert_eq!(OUTPUT_FORMAT_MP3_24K_48K, "audio-24khz-48kbitrate-mono-mp3");
+        // 必须与 edge_tts 内部写死的值一致，否则上报给上层的采样率是假的
+        assert_eq!(EDGE_OUTPUT_FORMAT, "audio-24khz-48kbitrate-mono-mp3");
+        assert_eq!(EDGE_SAMPLE_RATE, 24_000);
+        assert_eq!(EDGE_BITRATE_BPS, 48_000);
     }
 
     #[test]
     fn config_default() {
         let c = EdgeConfig::default();
         assert_eq!(c.voice, "zh-CN-XiaoxiaoNeural");
-        assert!(!c.output_format.is_empty());
+        assert_eq!(c.pitch, "+0Hz");
+        assert_eq!(c.rate, "+0%");
+        assert_eq!(c.volume, "+0%");
     }
 }
 

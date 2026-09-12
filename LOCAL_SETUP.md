@@ -57,15 +57,13 @@ bash scripts/run_poc.sh --skip-network
 | `boundary_offset_semantics.md` | **关键决策文件** —— 决定阶段 2 用哪种映射策略 |
 | `summary.json` | 全部用例汇总 |
 
-## 5. 阶段 1b 之后需要什么
-
-阶段 1b 接入 flutter_rust_bridge，需要**额外**装：
+## 5. 跑 Flutter 端还需要什么
 
 - Flutter SDK（<https://docs.flutter.dev/get-started/install>）—— macOS / Windows 桌面端
-- protoc（Protocol Buffers 编译器）—— `brew install protobuf` / `apt install protobuf-compiler` / Windows 见 protoc 官方
-- Dart `build_runner` —— `dart pub global activate ...`，在 1b 步骤清单里有
 
-到时再按 `apps/sayit_app/notes.md` 一步步走即可。
+**不需要** protoc，也**不需要** `build_runner`：Dart 与 Rust 不走 flutter_rust_bridge，
+而是 `sayit-poc` 子进程 + stdout JSON（`apps/sayit_app/notes.md` 有完整说明），
+因此没有 protobuf 定义、也没有需要代码生成的桥接层。
 
 ## 6. 常见问题
 

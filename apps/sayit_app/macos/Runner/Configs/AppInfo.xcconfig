@@ -11,4 +11,4 @@ PRODUCT_NAME = SayIt
 PRODUCT_BUNDLE_IDENTIFIER = com.sayit.sayitApp
 
 // The copyright displayed in application information
-PRODUCT_COPYRIGHT = Copyright © 2026 com.sayit. All rights reserved.
+PRODUCT_COPYRIGHT = Copyright © 2026 SayIt Contributors

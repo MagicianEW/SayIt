@@ -2,8 +2,10 @@
 
 ## 不做
 
-- 不引入 Flutter crate 与 flutter_rust_bridge（留到 1b）
-- 不引入 symphonia / minimp3（MP3 兜底留到 1b）
+- 不引入 Flutter crate 与 flutter_rust_bridge —— **已评估并放弃**，Dart 与 Rust 改为
+  `sayit-poc` 子进程 + stdout JSON 通信，理由见 `apps/sayit_app/notes.md`
+- 不引入 symphonia / minimp3 —— **已不需要**：edge_tts 只能输出 MP3，合成与导出都直接
+  拼接 MP3 字节，不需要解码。除非将来要做句间静音插入，否则不要加
 - 不引入 drift（存储层留到 1c）
 - 不引入 Riverpod（UI 层留到 2）
 - PoC 阶段 Rust 端不依赖 `tokio-tungstenite` 之外的任何 Edge TTS 客户端 crate

@@ -1,7 +1,14 @@
 #!/bin/bash
 set -e
 
-FLUTTER_PATH="/Users/xingxiaoshu/flutter/bin/flutter"
+# 不要写死某台机器上的绝对路径（以前这里是 /Users/xingxiaoshu/flutter/bin/flutter，
+# 换台机器就跑不了）。优先用环境变量，其次用 PATH 上的 flutter。
+FLUTTER_PATH="${FLUTTER_PATH:-$(command -v flutter || true)}"
+
+if [ -z "$FLUTTER_PATH" ]; then
+  echo "错误：找不到 flutter。请先安装 Flutter，或设置 FLUTTER_PATH=/path/to/flutter" >&2
+  exit 1
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_ROOT="$(dirname "$SCRIPT_DIR")"

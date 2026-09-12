@@ -18,7 +18,13 @@ use serde::Serialize;
 mod cases;
 
 #[derive(Parser, Debug)]
-#[command(name = "sayit-poc", version, about = "SayIt Stage 1a PoC harness")]
+#[command(
+    name = "sayit-poc",
+    version,
+    about = "SayIt Stage 1a PoC harness",
+    // 不带任何参数时打印帮助并退出，而不是 panic（以前是 cli.case.expect(...)）
+    arg_required_else_help = true,
+)]
 struct Cli {
     /// 要跑的用例
     #[arg(long, value_enum)]
@@ -39,10 +45,6 @@ struct Cli {
     /// 语音（默认 zh-CN-XiaoxiaoNeural）
     #[arg(long, default_value = "zh-CN-XiaoxiaoNeural")]
     voice: String,
-
-    /// 输出格式（raw-16khz-16bit-mono-pcm 或 audio-24khz-48kbitrate-mono-mp3）
-    #[arg(long, default_value = "raw-16khz-16bit-mono-pcm")]
-    output_format: String,
 
     /// 语速（默认 +0%，范围 -100% 到 +100%，负数为减速，正数为加速）
     #[arg(long, default_value = "+0%")]
@@ -106,7 +108,6 @@ async fn main() -> anyhow::Result<()> {
         let opts = cases::SynthOpts {
             text,
             voice: cli.voice,
-            output_format: cli.output_format,
             rate: cli.rate,
             pitch: cli.pitch,
             volume: cli.volume,
@@ -124,7 +125,14 @@ async fn main() -> anyhow::Result<()> {
     }
 
     // 用例模式
-    let case_val = cli.case.expect("either --case or --synthesize-text is required");
+    let case_val = match cli.case {
+        Some(c) => c,
+        None => {
+            anyhow::bail!(
+                "需要指定 --case <1|3|4|all>、--synthesize-text <TEXT> 或 --list-voices 之一"
+            );
+        }
+    };
 
     std::fs::create_dir_all(&cli.reports_dir)
         .with_context(|| format!("创建 reports 目录失败: {}", cli.reports_dir.display()))?;
@@ -138,7 +146,7 @@ async fn main() -> anyhow::Result<()> {
 
     for case in cases_to_run {
         let (passed, summary, report_path) = match case {
-            Case::Pcm => cases::case1_pcm(&cli.reports_dir).await?,
+            Case::Pcm => cases::case1_synth(&cli.reports_dir).await?,
             Case::Drm => cases::case3_drm(&cli.reports_dir).await?,
             Case::Boundary => cases::case4_boundary_offset(&cli.reports_dir).await?,
             Case::All => unreachable!(),

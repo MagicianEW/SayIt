@@ -4,18 +4,22 @@ members = [
     "crates/sayit-drm",
     "crates/sayit-edge",
     "crates/sayit-poc-bin",
-    "crates/sayit-ffi",
 ]
 
 [workspace.package]
-version = "0.1.0"
+version = "0.1.4"
 edition = "2021"
 rust-version = "1.75"
-license = "MIT"
-repository = "https://github.com/local/sayit"
+# 与仓库根 LICENSE 及各源文件头保持一致（GPL-3.0-or-later）。
+# 之前写的是 MIT，与实际的 GPL-3.0-or-later 授权不一致。
+license = "GPL-3.0-or-later"
+repository = "https://github.com/MagicianEW/SayIt"
 
 [workspace.dependencies]
-tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util"] }
+# 注意：features 必须显式列全。sayit-edge 用到了 tokio::sync::oneshot，
+# 以前是靠 flutter_rust_bridge 依赖间接把 "sync" 打开的，删掉那个依赖后
+# 就编译不过了（E0603: module `sync` is private）。不要依赖传递启用的 feature。
+tokio = { version = "1.40", features = ["rt-multi-thread", "macros", "net", "time", "process", "io-util", "sync"] }
 tokio-tungstenite = { version = "0.24", features = ["rustls-tls-webpki-roots"] }
 tungstenite = "0.24"
 url = "2.5"

@@ -89,13 +89,13 @@ BEGIN
     BEGIN
         BLOCK "040904e4"
         BEGIN
-            VALUE "CompanyName", "com.sayit" "\0"
-            VALUE "FileDescription", "sayit_app" "\0"
+            VALUE "CompanyName", "SayIt" "\0"
+            VALUE "FileDescription", "SayIt" "\0"
             VALUE "FileVersion", VERSION_AS_STRING "\0"
-            VALUE "InternalName", "sayit_app" "\0"
-            VALUE "LegalCopyright", "Copyright (C) 2026 com.sayit. All rights reserved." "\0"
-            VALUE "OriginalFilename", "sayit_app.exe" "\0"
-            VALUE "ProductName", "sayit_app" "\0"
+            VALUE "InternalName", "SayIt" "\0"
+            VALUE "LegalCopyright", "Copyright (C) 2026 SayIt Contributors" "\0"
+            VALUE "OriginalFilename", "SayIt.exe" "\0"
+            VALUE "ProductName", "SayIt" "\0"
             VALUE "ProductVersion", VERSION_AS_STRING "\0"
         END
     END

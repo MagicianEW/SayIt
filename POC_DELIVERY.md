@@ -1,5 +1,10 @@
 # SayIt PoC 阶段交付清单（v1.4 §6 阶段 1a）
 
+> ⚠️ **2026-08-08 的时点快照，部分内容已被后续变更推翻：**
+> `flutter_rust_bridge 接入` 与 `WAV 拼接工具类` 这两项 1b 计划**均已取消**
+> （前者改为 `sayit-poc` 子进程通信，后者因 edge_tts 只能输出 MP3 而不可行）。
+> 详见 [`apps/sayit_app/notes.md`](./apps/sayit_app/notes.md)。
+
 > **生成时间**：2026-08-08
 > **最终结论**：阶段 1a **PASS**——通过 PyO3 嵌入 Python `edge-tts` 绕开 rustls TLS 指纹问题。
 > 用例 1（PCM 直出）、用例 3（DRM Token）、用例 4（边界偏移）**全部通过**。

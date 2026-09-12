@@ -31,19 +31,39 @@ echo "[2/4] 用例 3：DRM Token 生成（离线）"
 cargo run -p sayit-poc-bin --quiet -- --case 3
 
 # 3. token 对照：Rust vs Python（如果 Python 可用）
+#
+# 以前这一步是坏的，两处都错：
+#   - 它把 `--case 3` 的**标准输出**（是 "[PASS] Drm: ..." / "汇总已写入: ..." 这类
+#     文本，根本不是 JSON）喂给 json.load，必然抛异常；
+#   - 它引用的 reference/edge-tts/sec_ms_gec.py 在仓库里并不存在。
+# 结果永远打印"跳过：未能提取 token"，Rust/Python 对照实际从未真正跑过。
+# 现在改为：从 reports/case3_drm.json 读 Rust 侧 token，
+# 再用内联的 Python 参考实现算同一个 5 分钟窗口的期望值做比对。
 if command -v python3 >/dev/null 2>&1; then
-  echo "[3/4] token 对照：Rust 手写 vs Python 参考"
-  RUST_TOKEN=$(cargo run -p sayit-poc-bin --quiet -- --case 3 2>/dev/null | \
-               python3 -c "import sys,json; print(json.load(sys.stdin)['token_now_preview'])" 2>/dev/null || echo "")
-  PY_TOKEN=$(python3 reference/edge-tts/sec_ms_gec.py 2>/dev/null || echo "")
+  echo "[3/4] token 对照：Rust 手写 vs Python 参考实现"
+  RUST_TOKEN=$(python3 -c "
+import json, sys
+try:
+    print(json.load(open('reports/case3_drm.json'))['token_now_preview'])
+except Exception as e:
+    sys.stderr.write(str(e) + '\n')
+" 2>/dev/null || echo "")
+  PY_TOKEN=$(python3 -c "
+import hashlib, time
+ticks = time.time() + 11644473600
+ticks -= ticks % 300
+s = '{:.0f}'.format(ticks * 1e9 / 100) + '6A5AA1D4EAFF4E9FB37E23D68491D6F4'
+print(hashlib.sha256(s.encode()).hexdigest().upper()[:40])
+" 2>/dev/null || echo "")
   if [ -n "${PY_TOKEN:-}" ] && [ -n "${RUST_TOKEN:-}" ]; then
     if [ "${RUST_TOKEN}" = "${PY_TOKEN}" ]; then
       echo "  ✅ Rust 与 Python token 完全一致"
     else
       echo "  ⚠️  Rust 与 Python token 不一致"
-      echo "     Rust:  ${RUST_TOKEN}"
+      echo "     Rust:   ${RUST_TOKEN}"
       echo "     Python: ${PY_TOKEN}"
-      echo "     需要校核 sayit-drm 实现"
+      echo "     （若刚好跨越 5 分钟窗口边界，重跑一次即可）"
+      echo "     持续不一致才需要校核 sayit-drm 实现"
     fi
   else
     echo "  ⚠️  跳过：未能提取 token"

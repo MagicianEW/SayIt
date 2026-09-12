@@ -5,104 +5,97 @@ use std::path::Path;
 use anyhow::Result;
 use sayit_edge::{EdgeConfig, SynthesizeRequest};
 
-/// 用例 1：PCM 直出测试。
+/// 用例 1：端到端合成测试。
 ///
-/// 流程：
-/// 1. 先尝试 `raw-16khz-16bit-mono-pcm`（v1.4 §3.1.4 优先档）
-/// 2. 若服务端拒绝（403），降级到 `audio-24khz-48kbitrate-mono-mp3`（上游默认）
-/// 3. 验证返回 sample_rate/channels/format/audio 非空
+/// edge_tts 6.x / 7.x 的输出格式**不可配置**，恒为
+/// `audio-24khz-48kbitrate-mono-mp3`（24kHz / 48kbps CBR / 单声道），
+/// `Communicate` 也不接受 `output_format` 参数。
+/// 所以这里不再做"PCM 优先 + MP3 兜底"的双路径（那个分支以前是假的：
+/// 两种请求拿到的其实是同一份 MP3，只是上报的 sample_rate 不同），
+/// 改为验证真实返回的音频与元数据是否自洽。
 ///
 /// 失败处理：网络不可用时返回 `(false, "...")` 而非 panic；这允许离线 / CI 环境跑通占位。
-pub async fn case1_pcm(reports_dir: &Path) -> Result<(bool, String, String)> {
-    // 使用 venv 内的 python3（PoC 约定路径）；fallback 到系统 python3
-    let python_path = std::env::var("SAYIT_PYTHON")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let venv_py = format!("{home}/.sayit-venv/bin/python3");
-            if std::path::Path::new(&venv_py).exists() {
-                venv_py
-            } else {
-                "python3".to_string()
-            }
-        });
-    let client = sayit_edge::EdgeClient::with_python_path(python_path);
+pub async fn case1_synth(reports_dir: &Path) -> Result<(bool, String, String)> {
+    let client = sayit_edge::EdgeClient::new();
 
-    // 优先 raw PCM（v1.4 §3.1.4）
-    let primary = SynthesizeRequest {
-        ssml: r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN"><voice name="zh-CN-XiaoxiaoNeural">测试文本</voice></speak>"#.to_string(),
-        config: EdgeConfig {
-            output_format: sayit_edge::OUTPUT_FORMAT_PCM_16K.to_string(),
-            ..Default::default()
-        },
+    const SSML: &str = r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN"><voice name="zh-CN-XiaoxiaoNeural">测试文本</voice></speak>"#;
+
+    let req = SynthesizeRequest {
+        ssml: SSML.to_string(),
+        config: EdgeConfig::default(),
     };
-    let (primary_result, primary_err) = match client.synthesize(primary).await {
+
+    let (result, err) = match client.synthesize(req).await {
         Ok(r) => (Some(r), None),
         Err(e) => (None, Some(format!("{e}"))),
     };
 
-    // 兜底：MP3
-    let fallback = SynthesizeRequest {
-        ssml: r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN"><voice name="zh-CN-XiaoxiaoNeural">测试文本</voice></speak>"#.to_string(),
-        config: EdgeConfig {
-            output_format: sayit_edge::OUTPUT_FORMAT_MP3_24K_48K.to_string(),
-            ..Default::default()
-        },
-    };
-    let (fallback_result, fallback_err) = match client.synthesize(fallback).await {
-        Ok(r) => (Some(r), None),
-        Err(e) => (None, Some(format!("{e}"))),
-    };
-
-    // 优先采用 primary，否则用 fallback
-    let chosen = primary_result.or(fallback_result);
-
-    let (passed, summary, payload) = match chosen {
+    let (passed, summary, payload) = match result {
         Some(result) => {
-            let pcm_ok = result.sample_rate > 0
-                && result.channels == 1
-                && !result.audio.is_empty()
-                && (result.format == "pcm" || result.format == "mp3");
+            // 元数据自洽性：采样率/格式/声道必须与 edge_tts 的固定输出一致
+            let format_ok = result.format == "mp3";
+            let sample_rate_ok = result.sample_rate == sayit_edge::EDGE_SAMPLE_RATE;
+            let channels_ok = result.channels == 1;
+            let audio_ok = !result.audio.is_empty();
+
+            // 48kbps CBR → 6000 字节/秒；用字节数反推时长，作为自洽性交叉验证
+            let expected_ms = result.audio.len() as f64 * 8.0 * 1000.0
+                / sayit_edge::EDGE_BITRATE_BPS as f64;
+            let last_boundary_ms = result
+                .boundaries
+                .last()
+                .map(|b| b.audio_offset_ms + b.duration_ms)
+                .unwrap_or(0.0);
+            let duration_plausible = expected_ms > 0.0 && last_boundary_ms <= expected_ms * 1.5;
+
+            let ok = format_ok && sample_rate_ok && channels_ok && audio_ok;
             let summary = format!(
-                "{} 直出成功：{} 字节 @ {}Hz/{}ch ({} 个 WordBoundary)",
-                result.format.to_uppercase(),
+                "合成成功：{} 字节 @ {}Hz/{}ch（{}，约 {:.0}ms，{} 个 WordBoundary）\
+                 —— 元数据自洽={}",
                 result.audio.len(),
                 result.sample_rate,
                 result.channels,
-                result.boundaries.len()
+                result.format,
+                expected_ms,
+                result.boundaries.len(),
+                if ok && duration_plausible { "是" } else { "否" }
             );
-            (pcm_ok, summary, Some(result))
+            (
+                ok,
+                summary,
+                Some((result, expected_ms, last_boundary_ms, duration_plausible)),
+            )
         }
-        None => {
-            let summary = format!(
-                "未跑通：primary={}；fallback={}",
-                primary_err.as_deref().unwrap_or_default(),
-                fallback_err.as_deref().unwrap_or_default()
-            );
-            (false, summary, None)
-        }
+        None => (
+            false,
+            format!("未跑通：{}", err.as_deref().unwrap_or_default()),
+            None,
+        ),
     };
 
     let payload_json = match &payload {
-        Some(r) => serde_json::json!({
+        Some((r, expected_ms, last_boundary_ms, duration_plausible)) => serde_json::json!({
             "audio_bytes": r.audio.len(),
             "sample_rate": r.sample_rate,
             "channels": r.channels,
             "format": r.format,
+            "expected_sample_rate": sayit_edge::EDGE_SAMPLE_RATE,
+            "expected_format": sayit_edge::EDGE_OUTPUT_FORMAT,
+            "expected_bitrate_bps": sayit_edge::EDGE_BITRATE_BPS,
+            "estimated_duration_ms": expected_ms,
+            "last_boundary_end_ms": last_boundary_ms,
+            "duration_plausible": duration_plausible,
             "boundaries_count": r.boundaries.len(),
             "first_boundary": r.boundaries.first(),
-            "primary_attempt": if primary_err.is_none() { "ok" } else { "failed" },
-            "primary_error": primary_err,
-            "fallback_attempt": if fallback_err.is_none() { "ok" } else { "failed" },
-            "fallback_error": fallback_err,
+            "error": err,
         }),
         None => serde_json::json!({
             "status": "skipped",
-            "primary_error": primary_err,
-            "fallback_error": fallback_err,
+            "error": err,
         }),
     };
 
-    let path = reports_dir.join("case1_pcm.json");
+    let path = reports_dir.join("case1_synth.json");
     std::fs::write(&path, serde_json::to_vec_pretty(&payload_json)?)?;
 
     Ok((passed, summary, path.display().to_string()))
@@ -161,19 +154,7 @@ pub async fn case4_boundary_offset(reports_dir: &Path) -> Result<(bool, String, 
     let ssml = r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN"><voice name="zh-CN-XiaoxiaoNeural">第一句。<break time="300ms"/>第二句。</voice></speak>"#;
     let plain_text = "第一句。第二句。";
 
-    // 使用 venv 内的 python3（用户本地约定路径）；fallback 到系统 python3
-    let python_path = std::env::var("SAYIT_PYTHON")
-        .unwrap_or_else(|_| {
-            // 优先 ~/.sayit-venv/bin/python3（v1.4 PoC 约定）
-            let home = std::env::var("HOME").unwrap_or_default();
-            let venv_py = format!("{home}/.sayit-venv/bin/python3");
-            if std::path::Path::new(&venv_py).exists() {
-                venv_py
-            } else {
-                "python3".to_string()
-            }
-        });
-    let client = sayit_edge::EdgeClient::with_python_path(python_path);
+    let client = sayit_edge::EdgeClient::new();
     let req = sayit_edge::SynthesizeRequest {
         ssml: ssml.to_string(),
         config: sayit_edge::EdgeConfig::default(),
@@ -288,7 +269,6 @@ use serde::{Deserialize, Serialize};
 pub struct SynthOpts {
     pub text: String,
     pub voice: String,
-    pub output_format: String,
     pub rate: String,
     pub pitch: String,
     pub volume: String,
@@ -314,32 +294,19 @@ pub struct BoundaryOutput {
 }
 
 pub async fn synthesize_text(opts: SynthOpts) -> anyhow::Result<SynthesisOutput> {
-    // 预检 Python 环境
+    // 预检 Python 环境（给出可执行的修复提示，而不是让子进程报一个看不懂的错）
     if let Err(e) = sayit_edge::EdgeClient::check_python_env() {
         anyhow::bail!("Python 环境检查失败: {}", e);
     }
 
-    let python_path = std::env::var("SAYIT_PYTHON")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let venv_py = format!("{home}/.sayit-venv/bin/python3");
-            if std::path::Path::new(&venv_py).exists() {
-                venv_py
-            } else {
-                "python3".to_string()
-            }
-        });
-
-    let client = sayit_edge::EdgeClient::with_python_path(python_path);
+    let client = sayit_edge::EdgeClient::new();
     let req = sayit_edge::SynthesizeRequest {
         ssml: opts.text.clone(),
         config: sayit_edge::EdgeConfig {
             voice: opts.voice.clone(),
-            output_format: opts.output_format.clone(),
             rate: opts.rate.clone(),
             pitch: opts.pitch.clone(),
             volume: opts.volume.clone(),
-            ..Default::default()
         },
     };
 
@@ -371,18 +338,7 @@ pub async fn synthesize_text(opts: SynthOpts) -> anyhow::Result<SynthesisOutput>
 
 /// 获取 edge_tts 所有可用语音列表。
 pub async fn list_voices() -> anyhow::Result<Vec<sayit_edge::Voice>> {
-    let python_path = std::env::var("SAYIT_PYTHON")
-        .unwrap_or_else(|_| {
-            let home = std::env::var("HOME").unwrap_or_default();
-            let venv_py = format!("{home}/.sayit-venv/bin/python3");
-            if std::path::Path::new(&venv_py).exists() {
-                venv_py
-            } else {
-                "python3".to_string()
-            }
-        });
-
-    let client = sayit_edge::EdgeClient::with_python_path(python_path);
+    let client = sayit_edge::EdgeClient::new();
     let voices = client.list_voices().await?;
     Ok(voices)
 }

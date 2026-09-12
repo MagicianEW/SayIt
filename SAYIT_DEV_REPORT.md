@@ -1,5 +1,13 @@
 # SayIt 项目开发交接报告
 
+> ⚠️ **本文是 2026-08-08 阶段 1a 完成时点的快照，后续有重大变更，不要照着它动手：**
+> - **flutter_rust_bridge 方案已放弃**，Dart 与 Rust 改为 `sayit-poc` 子进程 + stdout JSON 通信；
+> - **WAV 拼接未实现且不会再实现**（edge_tts 只能输出 MP3），**句间停顿功能已移除**；
+> - 版本号与软件名称已收敛为单一来源，见仓库根 `README.md` 的「命名与版本」一节。
+>
+> 当前状态以 [`apps/sayit_app/notes.md`](./apps/sayit_app/notes.md) 与
+> [`SayIt-code-review.md`](../SayIt-code-review.md) 为准。
+
 > **版本**：1.0（PoC 阶段 1a 完成时）
 > **日期**：2026-08-08
 > **用途**：交接给新的开发 agent 继续开发。新 agent 应**通读本报告**，特别是第 6 节（踩坑记录），再开始工作。
