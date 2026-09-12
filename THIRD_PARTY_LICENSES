@@ -1,0 +1,41 @@
+SayIt（说吧）第三方组件许可证说明
+====================================
+
+本项目自身以 GPL-3.0-or-later 协议开源（见仓库根目录 LICENSE 文件）。
+为满足 GPL-3.0 第 6 条对「对应源码」与许可证声明的分发要求，以下随 Linux
+发布包（AppImage / 历史 tar.gz）一并分发的第三方动态库，其许可证与源码
+出处列示如下。
+
+这些组件通过运行时 dlopen 被本项目使用（音频后端 media_kit / just_audio_media_kit
+在 Linux 上依赖系统的 libmpv）。它们与本项目同为 GPL 系列许可证，相容。
+
+libmpv / mpv
+------------
+- 许可证：GPL-3.0-or-later
+- 版权：© mpv 贡献者
+- 源码：https://github.com/mpv-player/mpv
+- 说明：本项目仅分发 mpv 构建产出的动态库，不含任何 mpv 修改。
+
+FFmpeg（libavcodec / libavformat / libavutil / libswresample / libswscale 等）
+--------------------------------------------------------------------------------
+- 许可证：GPL-2.0-or-later 或 LGPL-2.1-or-later（mpv 链接的构建启用 GPL）
+- 版权：© FFmpeg 贡献者
+- 源码：https://github.com/FFmpeg/FFmpeg
+
+libplacebo
+----------
+- 许可证：LGPL-2.1-or-later
+- 版权：© libplacebo 贡献者
+- 源码：https://code.videolan.org/videolan/libplacebo
+
+其他被一并打包的多媒体依赖（如 libass、libbluray、libdvdnav、libsdl2、
+libmujs、libzimg、libuchardet 等，具体以发布包内 lib/ 目录为准）
+--------------------------------------------------------------------------------
+- 多为 LGPL-2.1 / BSD / MIT 等与 GPL-3.0 相容的许可证。
+- 源码一般可在其各自上游仓库或对应 Linux 发行版的 source package 中获取
+  （如 Ubuntu: https://packages.ubuntu.com/source/ <版本>/<包名>）。
+
+说明
+----
+本文件随发布包分发即视为已满足 GPL-3.0 对捆绑组件的许可证与版权声明要求。
+本项目完整对应源码见仓库根目录及上述各上游链接。

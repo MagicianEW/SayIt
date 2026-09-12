@@ -60,7 +60,13 @@ SayIt/
 
 ## 下载
 
-从 [Releases](https://github.com/MagicianEW/SayIt/releases) 页面下载最新版本。
+从 [Releases](https://github.com/MagicianEW/SayIt/releases) 页面下载最新版本。各平台产物：
+
+| 平台 | 文件 | 安装方式 |
+|------|------|----------|
+| macOS | `SayIt_macos_<ver>.dmg` | 拖进 Applications，首次需移除 quarantine（见下文） |
+| Windows | `SayIt_windows_<ver>.zip` | 解压即用的便携版 |
+| Linux | `SayIt_linux_<ver>.AppImage` | 加可执行权限后直接运行，**无需安装 libmpv** |
 
 ## 前置依赖
 
@@ -120,22 +126,15 @@ MethodChannel。初始化只需在 `main()` 里调一次 `JustAudioMediaKit.ensu
 | 平台 | libmpv 来源 | 是否需要额外安装 |
 |------|-------------|------------------|
 | Windows | `media_kit_libs_windows_audio` 随包自带 libmpv / FFmpeg DLL | 否，解压即用 |
-| Linux | 需要系统提供（media_kit 运行期 `dlopen`） | **是**，按下表装 |
+| Linux | AppImage 内已打包 libmpv 及其依赖树（CI 用 `scripts/bundle_libmpv_linux.sh` 递归收集） | 否，AppImage 直接运行 |
 
-```bash
-# Debian / Ubuntu（24.04 是 libmpv2；22.04 是 libmpv1）
-sudo apt install libmpv2
-# Fedora
-sudo dnf install mpv-libs
-# Arch
-sudo pacman -S mpv
-```
-
-> **Linux 上为什么不把 libmpv 直接打进包里**：`libmpv2` 自身还依赖 40 多个库
-> （libplacebo、libmujs、libbluray、libsdl2、ffmpeg 各件……），大多不在默认桌面环境里。
-> 只塞一个 `libmpv.so.2` 既凑不出完整依赖，又会在 22.04 这类只有 `libmpv.so.1` 的系统上
-> 抢先生效、反而加载失败。所以按 media_kit 的约定把 libmpv 当系统依赖 ——
-> 这与本项目本就要求自装 Python + edge_tts 的约定是一致的。
+> **Linux 的 libmpv 是怎么打进包的**：`libmpv2` 自身依赖 40 多个库（libplacebo、
+> libmujs、libbluray、libsdl2、ffmpeg 各件……）。CI 不再只拷一个 `libmpv.so.2`，
+> 而是用 `ldd` 递归把整棵依赖树拷进 AppImage 的 `lib/`，并把每个库的 rpath 改成
+> `$ORIGIN`，使依赖树内部自洽；同时排除 libc / libstdc++ / libGL / libgtk 等系统核心库，
+> 避免 ABI 冲突与「抢在系统库前生效」。这样发布的 AppImage **无需用户再装 libmpv** 即可播放。
+> 随包分发的第三方库许可证见仓库根 `THIRD_PARTY_LICENSES`（本项目自身为 GPL-3.0-or-later，
+> 与 libmpv 同源，相容）。
 
 > 之所以不用 `just_audio_windows`：它体积更小，但对「读取字节流」标注为 *not tested*，
 > 而本应用的 `_BytesAudioSource` 正是把内存里的 MP3 交给 just_audio 的本地 HTTP 代理
@@ -202,7 +201,7 @@ gh release create v0.1.4 --title "SayIt v0.1.4" --generate-notes
 - Release 必须是**已发布**状态才触发，存草稿不会触发。
 - 构建时 CI 会把 tag 里的版本号（去掉 `v` 前缀）写回 `VERSION` 再重新同步一遍，
   所以**产物文件名、打包进二进制的版本资源、`sayit-poc --version` 三者始终一致**。
-- 三个平台并行构建，全部成功后 `release` job 才把 `.dmg` / `.zip` / `.tar.gz`
+- 三个平台并行构建，全部成功后 `release` job 才把 `.dmg` / `.zip` / `.AppImage`
   上传到该 Release。构建产物同时保留为 Actions artifact，14 天有效。
 - 想只做一次测试构建、不发布，用 `workflow_dispatch` 手动触发（可指定版本号，
   留空则用仓库 `VERSION` 里的值）。

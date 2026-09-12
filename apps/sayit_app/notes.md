@@ -95,14 +95,17 @@ com.ryanheise.just_audio.methods)` —— 容易误判成自己写错了。
 
 - Windows 产物变大：`media_kit_libs_windows_audio` 会带上 libmpv / FFmpeg 的动态库。
   换来的是零运行时依赖，解压即用。
-- Linux 上 libmpv **不随包分发**（`media_kit_libs_linux` 的 CMake 只处理 mimalloc，
-  并把 `bundled_libraries` 置空），media_kit 在运行期 `dlopen` 系统里的
-  `libmpv.so.*`。所以 libmpv 是 Linux 的**运行前提**，写进 README。
-  **不要试图把 `libmpv.so.*` 拷进 `bundle/lib/` 来"自带"它**：`libmpv2` 自身还依赖
-  40 多个库（libplacebo / libmujs / libbluray / libsdl2 / ffmpeg 各件……），大多不在
-  默认桌面环境里；只塞一个 `libmpv.so.2` 凑不出完整依赖，还会因为 Flutter Linux
-  bundle 自带 `RPATH=$ORIGIN/lib` 而抢在系统库之前生效 —— 在只有 `libmpv.so.1` 的
-  22.04 上反而会把本来能用的系统库挡掉。
+- **Linux 改出 AppImage 并自带 libmpv**（2026-09-12 决定，取代「系统依赖」方案）：
+  `media_kit_libs_linux` 的 CMake 只处理 mimalloc、`bundled_libraries` 置空，所以
+  libmpv 不会经 pub 包进来；但 CI 用 `scripts/bundle_libmpv_linux.sh` 在打包阶段
+  `ldd` 递归把 libmpv + 整棵依赖树（ffmpeg / libplacebo / …）拷进 AppImage 的 `lib/`，
+  并把每个库的 rpath 改成 `$ORIGIN`，使依赖树内部自洽；同时**排除** libc / libstdc++ /
+  libGL / libgtk 等系统核心库，避免 ABI 冲突与「抢在系统库前生效」。
+  这样发布的 AppImage **无需用户再 `apt install libmpv2`** 即可播放，是真正的零安装。
+  许可证：libmpv(mpv) 为 GPL-3.0-or-later，与本项目同源；随包分发要求见 `THIRD_PARTY_LICENSES`。
+  ⚠️ 早期曾经只拷一个 `libmpv.so.2` 进 `bundle/lib/` 想"自带"它 —— 那是错误的：
+  依赖树不全、还会因 Flutter 的 `RPATH=$ORIGIN/lib` 在 22.04（只有 libmpv.so.1）上
+  抢在系统库前生效而加载失败。正确做法是**整棵依赖树 + rpath 隔离**，见上面的脚本。
 - 必须在 `main()` 里显式调一次 `JustAudioMediaKit.ensureInitialized()`。
   默认只在 windows / linux 上注册，macOS 不受影响。
 

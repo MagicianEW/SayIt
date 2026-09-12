@@ -230,7 +230,8 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            clang cmake ninja-build libgtk-3-dev liblzma-dev libstdc++-12-dev
+            clang cmake ninja-build libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libmpv-dev patchelf libfuse2
 
       - name: Build Rust binary
         run: |
@@ -242,32 +243,33 @@ jobs:
           cd apps/sayit_app
           flutter build linux --release
 
-      - name: Copy Rust binary into app bundle
+      - name: Copy Rust binary + bundle libmpv into app bundle
         run: |
           # Flutter Linux build outputs to build/linux/x64/release/bundle/
           # 可执行文件在 bundle/ 下，Dart 端也在 bundle/ 下查找（见 main.dart
           # _pocBinaryCandidates）。以前拷到 bundle/lib/，多了一层，运行时找不到。
-          cp sayit-poc/target/release/sayit-poc \
-             apps/sayit_app/build/linux/x64/release/bundle/
-          chmod +x apps/sayit_app/build/linux/x64/release/bundle/sayit-poc
+          BUNDLE=apps/sayit_app/build/linux/x64/release/bundle
+          cp sayit-poc/target/release/sayit-poc "$BUNDLE/"
+          chmod +x "$BUNDLE/sayit-poc"
 
-          # 注意：这里**不**打包 libmpv。音频后端 media_kit 是在运行时 dlopen
-          # 系统里的 libmpv.so.*，而 libmpv2 自身还依赖 40 多个库（libplacebo、
-          # libmujs、libbluray、libsdl2、ffmpeg 各件……）大多不在默认桌面环境里。
-          # 只塞一个 libmpv.so.2 进来既凑不出完整依赖、又会在 22.04 这类只有
-          # libmpv.so.1 的系统上抢先生效而加载失败。所以按上游（media_kit）的
-          # 约定，把 libmpv 当作系统依赖，写进 README 的运行前提里 —— 与本项目
-          # 本就要求用户自装 Python + edge_tts 的约定一致。
+          # 把 libmpv + 它整棵依赖树打进 bundle/lib（音频后端 media_kit 在 Linux
+          # 上运行时 dlopen libmpv.so.*）。脚本会排除系统核心库、并把每个打包库
+          # 的 rpath 改成 $ORIGIN，使依赖树内部自洽。这样发布的 Linux 包**无需
+          # 用户再 apt install libmpv2** 即可播放（真正的零安装）。
+          bash scripts/bundle_libmpv_linux.sh "$BUNDLE/lib"
+          cp THIRD_PARTY_LICENSES "$BUNDLE/" 2>/dev/null || true
 
-          ls -l apps/sayit_app/build/linux/x64/release/bundle/
-          cd apps/sayit_app/build/linux/x64/release
-          tar -czf SayIt_linux_${{ steps.ver.outputs.version }}.tar.gz bundle/
+          ls -l "$BUNDLE/"
+
+      - name: Build AppImage
+        run: |
+          bash scripts/make_appimage.sh "${{ steps.ver.outputs.version }}"
 
       - name: Upload Linux artifact
         uses: actions/upload-artifact@v4
         with:
           name: SayIt_linux_${{ steps.ver.outputs.version }}
-          path: apps/sayit_app/build/linux/x64/release/SayIt_linux_${{ steps.ver.outputs.version }}.tar.gz
+          path: SayIt_linux_${{ steps.ver.outputs.version }}.AppImage
           retention-days: 14
 
   # ── Release ─────────────────────────────────────────────────────────────
@@ -297,7 +299,7 @@ jobs:
           files=()
           files+=(artifacts/SayIt_macos_*/SayIt_macos_*.dmg)
           files+=(artifacts/SayIt_windows_*/SayIt_windows_*.zip)
-          files+=(artifacts/SayIt_linux_*/SayIt_linux_*.tar.gz)
+          files+=(artifacts/SayIt_linux_*/SayIt_linux_*.AppImage)
 
           if [ ${#files[@]} -eq 0 ]; then
             echo "::error::没有找到任何构建产物，release 上传中止"
