@@ -34,6 +34,13 @@ import re
 import sys
 from pathlib import Path
 
+# Windows 的控制台默认编码可能是 cp1252（GitHub 的 windows-latest runner 就是），
+# 本脚本会打印中文，直接 print 会抛 UnicodeEncodeError 让整个 CI 步骤以 1 退出。
+# 这里把 stdout / stderr 强制成 UTF-8。文件读写本身已经显式指定 utf-8，不受影响。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parent.parent
 VERSION_FILE = ROOT / "VERSION"
 PUBSPEC = ROOT / "apps" / "sayit_app" / "pubspec.yaml"

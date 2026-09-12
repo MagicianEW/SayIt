@@ -19,6 +19,10 @@ permissions:
 
 env:
   RUST_BACKTRACE: 1
+  # Windows runner 的控制台是 cp1252，Python 打印中文会抛 UnicodeEncodeError，
+  # 导致「Sync version and app name」这一步直接 1 退出（macOS / Linux 是 UTF-8 所以看不出来）。
+  # 开 UTF-8 模式（PEP 540）；两个 sync 脚本内部也各自 reconfigure 了一次，双保险。
+  PYTHONUTF8: "1"
 
 # 版本号与应用名的处理约定（重要）：
 #

@@ -43,6 +43,12 @@ import re
 import sys
 from pathlib import Path
 
+# 同 sync_version.py：Windows 控制台可能是 cp1252，打印中文会 UnicodeEncodeError。
+# 强制 stdout / stderr 用 UTF-8；文件读写已显式指定 utf-8，不受影响。
+for _stream in (sys.stdout, sys.stderr):
+    if hasattr(_stream, "reconfigure"):
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+
 EN_NAME = "SayIt"
 ZH_NAME = "说吧"
 
