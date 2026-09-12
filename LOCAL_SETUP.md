@@ -65,6 +65,28 @@ bash scripts/run_poc.sh --skip-network
 而是 `sayit-poc` 子进程 + stdout JSON（`apps/sayit_app/notes.md` 有完整说明），
 因此没有 protobuf 定义、也没有需要代码生成的桥接层。
 
+### Windows 本地构建的两个硬性前提
+
+Windows 上 `flutter build windows` 有两道容易卡住的门槛，缺一个都编译不过：
+
+1. **Visual Studio 的「使用 C++ 的桌面开发」工作负载**（含 MSVC 生成工具 + C++ CMake 工具）。
+   只装「Visual Studio 生成工具」而不勾这个工作负载是不够的 —— 报错是
+   `Unable to find suitable Visual Studio toolchain`。用 `flutter doctor -v` 可以看到
+   具体缺哪些组件，按提示在 VS Installer 里勾上即可。
+2. **开启开发者模式**（设置 → 系统 → 开发者选项）。
+   只要项目里有带原生代码的插件，Flutter 就要在
+   `windows/flutter/ephemeral/.plugin_symlinks/` 下建符号链接，而普通账户建符号链接需要
+   这个开关；没开会报 `Building with plugins requires symlink support.`
+   （`flutter pub get` 每次都会重建该目录，所以这个开关是长期需要，不是一次性设置）。
+   macOS / Linux 没有这个要求。
+
+```powershell
+# 检查开发者模式是否已开（返回 1 即为已开）
+Get-ItemProperty "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock" -Name AllowDevelopmentWithoutDevLicense
+```
+
+> 只**运行**已发布的 Windows 包不需要以上任何一条 —— 符号链接和 MSVC 只影响**编译**。
+
 ## 6. 常见问题
 
 **Q：rustc 太旧？**  

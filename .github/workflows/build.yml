@@ -230,7 +230,11 @@ jobs:
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq \
-            clang cmake ninja-build libgtk-3-dev liblzma-dev libstdc++-12-dev
+            clang cmake ninja-build libgtk-3-dev liblzma-dev libstdc++-12-dev \
+            libmpv-dev
+          # libmpv 是音频后端 media_kit 的运行期依赖：它不随 pub 包分发，
+          # 而是在运行时 dlopen 系统里的 libmpv.so.*（见下方打包步骤）。
+          # 装 libmpv-dev 是为了拿到 libmpv.so.*（24.04 是 libmpv2、22.04 是 libmpv1）。
 
       - name: Build Rust binary
         run: |
@@ -250,6 +254,16 @@ jobs:
           cp sayit-poc/target/release/sayit-poc \
              apps/sayit_app/build/linux/x64/release/bundle/
           chmod +x apps/sayit_app/build/linux/x64/release/bundle/sayit-poc
+
+          # 把 libmpv 一并打进去：media_kit 在 Linux 上是运行时 dlopen libmpv.so.*，
+          # 不打进去的话用户还得自己 apt install libmpv2，否则一播放就报找不到。
+          # Flutter 的 Linux bundle 自带 RPATH=$ORIGIN/lib，所以放进 lib/ 就能被找到。
+          # 用 -L 跟到真实文件、忽略链接名；万一发行版包名不同（libmpv.so.1/2）
+          # 也不会让整步失败。
+          mkdir -p apps/sayit_app/build/linux/x64/release/bundle/lib
+          cp -Lv /usr/lib/x86_64-linux-gnu/libmpv.so.* \
+             apps/sayit_app/build/linux/x64/release/bundle/lib/ || true
+
           ls -l apps/sayit_app/build/linux/x64/release/bundle/
           cd apps/sayit_app/build/linux/x64/release
           tar -czf SayIt_linux_${{ steps.ver.outputs.version }}.tar.gz bundle/

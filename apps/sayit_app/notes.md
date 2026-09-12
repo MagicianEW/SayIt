@@ -66,3 +66,39 @@ edge_tts 的输出格式在其 `Communicate.__init__` 里写死为
 - 想插句间静音就得 MP3 解码 → 拼 PCM → 重编码，本项目栈内没有 MP3 编码器，
   因此**句间停顿功能已整体移除**；
 - 逐句高亮的时间轴按已写入字节数 ÷ 6 换算毫秒（48 kbps = 6000 字节/秒），精确不漂移。
+
+## 决策：桌面端播放后端选 just_audio_media_kit
+
+**问题**：`just_audio` 只有 Android / iOS / macOS / web 的原生实现，Windows 与 Linux
+上没有任何播放后端。表现是代码完全正确、编译通过，但一按播放就抛
+`MissingPluginException(No implementation found for method init on channel
+com.ryanheise.just_audio.methods)` —— 容易误判成自己写错了。
+
+**候选方案与取舍：**
+
+| 方案 | Windows | Linux | 结论 |
+|------|---------|-------|------|
+| `just_audio_windows` | ✅ 纯原生 WinRT，体积小，无需初始化代码 | ❌ 不支持 | 单平台；且官方特性表里「读取字节流」标的是 *not tested*，而我们的 `_BytesAudioSource` 走的正是字节流 |
+| `just_audio_libwinmedia` | ✅ | ❌ | 2022 年的包，SDK 约束仍是 `<3.0.0`，Dart 3 下装不上 |
+| `just_audio_mpv` | ✅ | ✅ | 2023 年的包，同样受限于 `<3.0.0`，Dart 3 下装不上 |
+| `just_audio_media_kit` | ✅ | ✅ | **采用** |
+
+**为什么统一用 `just_audio_media_kit` 而不是「Windows 用一个、Linux 用另一个」：**
+
+1. 两个实现会同时注册 `com.ryanheise.just_audio.methods` 这个 MethodChannel，
+   在 Windows 上直接冲突，只能二选一。
+2. 只要 Linux 需要它，Windows 就没有理由再引入第二套后端 —— 多一套就多一处要单独调试。
+3. 它的官方特性表里「读取字节流」是 ✅（经由 just_audio 提供的本地 HTTP 代理），
+   正好覆盖本应用的播放路径。
+
+**代价：**
+
+- Windows 产物变大：`media_kit_libs_windows_audio` 会带上 libmpv / FFmpeg 的动态库。
+  换来的是零运行时依赖，解压即用。
+- Linux 上 libmpv **不随包分发**（`media_kit_libs_linux` 的 CMake 只处理 mimalloc，
+  并把 `bundled_libraries` 置空），media_kit 在运行期 `dlopen` 系统里的
+  `libmpv.so.*`。所以打包时要把 `libmpv.so.*` 拷进 `bundle/lib/`（Flutter 的 Linux
+  bundle 自带 `RPATH=$ORIGIN/lib`），并保留「装系统 libmpv」作为兜底说明。
+- 必须在 `main()` 里显式调一次 `JustAudioMediaKit.ensureInitialized()`。
+  默认只在 windows / linux 上注册，macOS 不受影响。
+

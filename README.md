@@ -107,6 +107,34 @@ python3 -c "import edge_tts; print('edge_tts OK')"
 export SAYIT_PYTHON=/path/to/your/python3
 ```
 
+### 音频播放后端（Windows / Linux 需要）
+
+macOS 由 `just_audio` 自带原生实现，下面这段不用管。
+
+Windows 与 Linux 上 `just_audio` 官方**不带**播放后端，直接用会在第一次播放时抛
+`MissingPluginException(No implementation found for method init on channel
+com.ryanheise.just_audio.methods)`。本项目用 `just_audio_media_kit` 把播放调用桥接到
+`media_kit`（底层 libmpv），两个平台共用同一套后端 —— 避免两个实现同时抢注同一个
+MethodChannel。初始化只需在 `main()` 里调一次 `JustAudioMediaKit.ensureInitialized()`。
+
+| 平台 | libmpv 来源 | 是否需要额外安装 |
+|------|-------------|------------------|
+| Windows | `media_kit_libs_windows_audio` 随包自带 libmpv / FFmpeg DLL | 否，解压即用 |
+| Linux | 系统提供（media_kit 运行期 `dlopen`） | 打包时已把 `libmpv.so.*` 放进 `bundle/lib/`；若仍报找不到，按下表装 |
+
+```bash
+# Debian / Ubuntu（22.04 上的包名是 libmpv1）
+sudo apt install libmpv2 mpv
+# Fedora
+sudo dnf install mpv-libs mpv
+# Arch
+sudo pacman -S mpv
+```
+
+> 之所以不用 `just_audio_windows`：它体积更小，但对「读取字节流」标注为 *not tested*，
+> 而本应用的 `_BytesAudioSource` 正是把内存里的 MP3 交给 just_audio 的本地 HTTP 代理
+> 再喂给播放器，走的就是字节流这条路；且它与 `just_audio_media_kit` 在 Windows 上会冲突。
+
 ## 命名与版本
 
 **应用名**：英文 `SayIt`，中文「说吧」。

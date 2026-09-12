@@ -11,6 +11,22 @@ dependencies:
   flutter:
     sdk: flutter
   just_audio: ^0.9.40
+  # just_audio 官方只带 Android / iOS / macOS / web 实现，桌面端没有播放后端。
+  # 少了它，Windows 与 Linux 上一按播放就抛
+  # MissingPluginException(No implementation found for method init on channel
+  # com.ryanheise.just_audio.methods) —— 不是代码写错，是根本没有原生实现。
+  #
+  # 这里统一用 just_audio_media_kit：它把 just_audio 的调用桥接到 media_kit
+  # （底层 libmpv），Windows 与 Linux 共用同一套后端，避免两个实现抢注同一个
+  # MethodChannel。它在官方特性表里明确支持「读取字节流」——本应用的
+  # _BytesAudioSource 正是把内存里的 MP3 交给 just_audio 的本地 HTTP 代理再喂给
+  # 播放器，走的就是这条路径（另一选择 just_audio_windows 对字节流标注的是
+  # "not tested"，且它与本包在 Windows 上会冲突，不能并存）。
+  just_audio_media_kit: ^2.1.0
+  # media_kit 的原生库。Windows 这份自带 libmpv / FFmpeg DLL，开箱即用；
+  # Linux 这份不自带，构建与运行都依赖系统 libmpv（见 README 的说明）。
+  media_kit_libs_windows_audio: any
+  media_kit_libs_linux: any
   file_picker: ^8.0.0
   path_provider: ^2.1.0
   shared_preferences: ^2.2.2

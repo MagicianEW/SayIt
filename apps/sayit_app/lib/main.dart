@@ -22,6 +22,7 @@ import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:just_audio/just_audio.dart';
+import 'package:just_audio_media_kit/just_audio_media_kit.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -31,6 +32,11 @@ import 'src/text_segmenter.dart';
 import 'src/voice_data.dart';
 
 void main() {
+  // 桌面端（Windows / Linux）必须显式初始化一次，just_audio 才知道该用哪套
+  // 原生后端；不调用就会在首次播放时抛 MissingPluginException。macOS 用的是
+  // just_audio 自带实现，这里默认只在 windows / linux 上注册，不影响 macOS。
+  WidgetsFlutterBinding.ensureInitialized();
+  JustAudioMediaKit.ensureInitialized();
   runApp(const SayItApp());
 }
 
