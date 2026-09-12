@@ -279,6 +279,10 @@ impl EdgeClient {
             .arg("-c")
             .arg(script)
             .arg(req.config.voice.clone())
+            // Windows 中文环境下 Python 的 stdout 默认用系统 ANSI 代码页（GBK/cp936），
+            // 而 Rust 侧按 UTF-8 读，会报 “stream did not contain valid UTF-8”。
+            // 强制 Python 以 UTF-8 输出；脚本侧同时把 JSON 写成纯 ASCII，双保险。
+            .env("PYTHONIOENCODING", "utf-8")
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -428,6 +432,8 @@ impl EdgeClient {
         let mut child = Command::new(&self.python_path)
             .arg("-c")
             .arg(script)
+            // 同上：强制 UTF-8 输出，避免中文环境下 Python 按 GBK 写 stdout。
+            .env("PYTHONIOENCODING", "utf-8")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -598,7 +604,10 @@ async def main():
                     "duration": chunk.get("duration", 0),
                     "length": chunk.get("length"),
                 }
-                sys.stdout.write("META " + json.dumps(meta, ensure_ascii=False) + "\n")
+                # ensure_ascii=True：输出保持纯 ASCII。中文 Windows 上 Python 的
+                # stdout 走 GBK，直接写中文原文会让 Rust 侧按 UTF-8 读失败。
+                # \uXXXX 转义在 GBK / UTF-8 / cp1252 下都是合法字节。
+                sys.stdout.write("META " + json.dumps(meta, ensure_ascii=True) + "\n")
                 sys.stdout.flush()
     except Exception as e:
         print(f"ERROR stream: {e}", flush=True)
@@ -626,7 +635,8 @@ async def main():
                 "gender": voice.get("Gender", ""),
                 "locale": voice.get("Locale", ""),
             }
-            sys.stdout.write("VOICE " + json.dumps(v, ensure_ascii=False) + "\n")
+            # 同 META：必须纯 ASCII，否则中文 Windows 下 GBK 输出会让 Rust 读取失败。
+            sys.stdout.write("VOICE " + json.dumps(v, ensure_ascii=True) + "\n")
             sys.stdout.flush()
     except Exception as e:
         print(f"ERROR {e}", flush=True)
