@@ -38,15 +38,26 @@ EOF
 chmod +x "$APPDIR/AppRun"
 
 # desktop entry (binary lives at the AppDir root)
+#   Categories 必须满足 AppStream 校验：Audio 是 AudioVideo 的子类，必须同时列出
+#   AudioVideo 主分类，否则 appimagetool 报 "requires another category: AudioVideo" 并退 1。
+#   Icon 必须指向 AppDir 内真实存在的图标文件，否则 appimagetool 报
+#   "Icon entry not found" 并退 1。
 cat > "$APPDIR/sayit.desktop" <<'EOF'
 [Desktop Entry]
 Type=Application
 Name=SayIt
 Comment=说吧 - 文本转语音 (TTS)
 Exec=sayit_app
-Categories=Audio;Utility;
+Icon=sayit
+Categories=AudioVideo;Audio;
 Terminal=false
 EOF
+
+# 内置一个 256x256 PNG 图标（SayIt 深蓝主题色），避免依赖外部图标资源。
+# 由 base64 解码生成，CI 环境无 ImageMagick/rsvg 也能产出合法图标。
+SAYIT_ICON_B64="iVBORw0KGgoAAAANSUhEUgAAAQAAAAEACAYAAABccqhmAAACYUlEQVR42u3UMQEAAAQAQYU001kUCmjghivww0dWD/BTiAAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAYABiAAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAYABiAAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAYABCAEGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAYABAAYAGABgAIABAAYAGABgAIABAAYAGABgAIABAAYAGABgAIABAAYAGABgAIABAAYAGABgAIABAAYAGABgAIABAAYAGABgAIABgAEABgAYAGAAgAEABgAYAGAAgAEABgAYAGAAgAEABgAYAGAAgAEABgAYAGAAgAEABgAYAGAAgAEABgAYAGAAgAEABgAYAGAAgAGAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQAGABgAYACAAQCXBT5oJPoouCz6AAAAAElFTkSuQmCC"
+printf '%s' "$SAYIT_ICON_B64" | base64 -d > "$APPDIR/sayit.png"
+[ -s "$APPDIR/sayit.png" ] || { echo "::error::生成图标失败"; exit 1; }
 
 # sanity: libmpv must be inside the bundle (bundle_libmpv_linux.sh wrote it)
 ls "$APPDIR/lib" | grep -E '^libmpv\.so' || { echo "::error::libmpv 未进入 AppDir/lib"; exit 1; }
