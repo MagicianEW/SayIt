@@ -36,11 +36,6 @@ fi
 [ -n "$LIBMPV" ] || { echo "::error::libmpv not found on build host (install libmpv-dev)"; exit 1; }
 echo "==> Bundling libmpv: $LIBMPV"
 
-# versioned sonames media_kit probes (it tries both .1 and .2)
-for v in 2 1; do
-  ln -sf "$(basename "$LIBMPV")" "$TARGET_LIB/libmpv.so.$v" 2>/dev/null || true
-done
-
 # System libs that must stay provided by the host OS. Bundling these causes
 # ABI conflicts / shadowing. Keep in sync with what a normal desktop provides.
 SYSTEM_RE='(linux-vdso|ld-linux|libc\.so|libm\.so|libdl\.so|libpthread|librt\.so|libstdc\+\+|libgcc_s|libresolv|libnss_|libX[a-z]|libxcb|libwayland|libdrm|libgbm|libGL\.so|libEGL\.so|libGLX|libGLdispatch|libgl\b|libgtk|libgdk|libglib|libgobject|libgio|libpango|libcairo|libatk|libdbus|libsystemd|libfontconfig|libfreetype|libasound|libpulse|libudev|libgmodule|libgthread|libmount|libblkid|libsepol|libselinux|libpcre)'
@@ -65,8 +60,18 @@ copy_deps() {
 }
 
 cp -L "$LIBMPV" "$TARGET_LIB/"
-patchelf --set-rpath '$ORIGIN' "$TARGET_LIB/$(basename "$LIBMPV")" 2>/dev/null || true
+REAL_BASE="$(basename "$LIBMPV")"
+patchelf --set-rpath '$ORIGIN' "$TARGET_LIB/$REAL_BASE" 2>/dev/null || true
 copy_deps "$LIBMPV"
+
+# versioned sonames media_kit probes (it tries both .1 and .2). Create them
+# AFTER the real file exists, and skip the one that already is the real file
+# so we never build a self-referencing symlink (which breaks the copy above).
+for v in 1 2; do
+  if [ "libmpv.so.$v" != "$REAL_BASE" ]; then
+    ln -sf "$REAL_BASE" "$TARGET_LIB/libmpv.so.$v"
+  fi
+done
 
 echo "==> Bundled $(ls -1 "$TARGET_LIB" | wc -l) files into $TARGET_LIB"
 ls -1 "$TARGET_LIB"
