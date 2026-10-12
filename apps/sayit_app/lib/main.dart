@@ -28,7 +28,9 @@ import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 import 'src/build_info.dart';
+import 'src/text_decoder.dart';
 import 'src/text_segmenter.dart';
+import 'src/tts_error.dart';
 import 'src/voice_data.dart';
 
 void main() {
@@ -41,6 +43,12 @@ void main() {
 }
 
 const _kExportPathKey = 'sayit_export_path';
+const _kVoiceKey = 'sayit_voice';
+const _kLanguageKey = 'sayit_language';
+const _kGenderKey = 'sayit_gender';
+const _kSpeedKey = 'sayit_speed';
+const _kPitchKey = 'sayit_pitch';
+const _kVolumeKey = 'sayit_volume';
 
 /// 应用名。约定：英文名 `SayIt` 用于技术标识（可执行文件名、包名等），
 /// 中文名「说吧」用于面向用户的显示。
@@ -61,8 +69,12 @@ const _kAppNameEn = 'SayIt';
 /// 只有"如实使用真实格式"。
 const _kAudioExtension = 'mp3';
 
-/// 48 kbps CBR → 6000 字节/秒。用字节数可以**精确**换算时长，
-/// 逐句高亮的时间轴不再靠边界事件累加（那样会漂移）。
+/// 48 kbps CBR → 6000 字节/秒。逐句高亮的时间轴按**已写入字节数**换算，
+/// 而不是靠边界事件累加（那样会随句数累积滞后）。
+///
+/// 注意这只是**近似**，不是帧级精确：拼接的每段 MP3 各自带帧头与编码器延迟信息，
+/// 字节换算出的时间与解码器上报的时长（just_audio 的 duration）可能存在偏差，
+/// 长文本尾部的高亮会有肉眼可见的偏移。
 const _kBytesPerMs = 6.0;
 
 /// 句间停顿功能已移除。
@@ -124,7 +136,8 @@ class WordBoundary {
 
 /// 把多个句子的 MP3 字节拼成一整段（直接拼接，不插入静音）。
 class _MixedAudio {
-  /// 整段 MP3 字节（CBR 48kbps，每秒 6000 字节 → 时长 = bytes / 6000 秒）。
+  /// 整段 MP3 字节（CBR 48kbps，每秒 6000 字节 → 时长 ≈ bytes / 6000 秒，
+  /// 近似换算的偏差见 [`_kBytesPerMs`]）。
   final Uint8List bytes;
   /// 每句在拼接后音频中的起始毫秒偏移（与 `bytes` 长度一一对应）。
   final List<int> sentenceOffsetsMs;
@@ -169,6 +182,42 @@ class _SayItHomePageState extends State<SayItHomePage> {
   bool _isScanningVoices = true;
   bool _voiceScanFailed = false;
 
+  /// 正在跑的那次 `sayit-poc` 子进程。
+  ///
+  /// 以前用 `Process.run`（阻塞等待），拿不到句柄，「停止」只能停播放器、
+  /// 停不了正在进行的合成 —— 唯一能中断的时机是 `mounted == false`，
+  /// 也就是只有关窗口才真的停得下来。改成 `Process.start` 后可以 kill。
+  Process? _activePocProcess;
+
+  /// 用户点了「停止」。`_mixSentences` 在每句开头检查它并抛
+  /// [_CancelledException]，同时 [_activePocProcess] 会被 kill。
+  bool _cancelRequested = false;
+
+  /// 正在试听单句。
+  ///
+  /// 试听换的是单句音源，但 [_sentenceAudioOffsetsMs] 还是整篇的偏移表；
+  /// 单句音频从 0ms 开始，`_sentenceIndexAt(0)` 恒返回 0，
+  /// 于是 `positionStream` 会把高亮错拉到第 1 句。试听期间靠这个标志跳过
+  /// 高亮更新。
+  bool _isPreviewing = false;
+
+  /// 试听令牌：连续快速点不同句子时，只有最后一次的结果会被播放。
+  int _previewToken = 0;
+
+  /// 本次导入设定时被拒绝的字段，用于如实告诉用户"这个没生效"，
+  /// 而不是弹一句笼统的「设定已导入」就完事。
+  final List<String> _voiceRejects = [];
+
+  /// 延迟持久化设置的定时器。滑块 onChanged 每拖动一帧就触发一次，
+  /// 直接落盘会把 SharedPreferences 写爆，所以合并成一次。
+  Timer? _persistTimer;
+
+  /// 已合成音频的缓存，供「导出」复用（见 [_mixedAudioFor]）。
+  _MixedAudio? _cachedMixed;
+
+  /// 缓存对应的输入指纹：音色 + 三个参数 + 每句文本。任一项变了缓存即失效。
+  String? _cachedFingerprint;
+
   String _selectedVoice = 'zh-CN-XiaoxiaoNeural';
   String _selectedLanguage = 'zh-CN';
   String _selectedGender = 'female';
@@ -177,14 +226,29 @@ class _SayItHomePageState extends State<SayItHomePage> {
   double _volume = 1.0;
   String? _exportPath;
 
+  /// 载入中的设置。[_scanVoices] 要等它完成才能决定默认音色，
+  /// 否则扫描回调会用「内置默认音色」覆盖掉刚读出来的用户设置。
+  Future<void>? _settingsLoaded;
+
+  static final _validLanguageCodes =
+      languages.map((l) => l['code']!).toSet();
+  static final _validGenders = {'female', 'male'};
+  static final _voiceIndex = {for (final v in voiceData) v.value: v};
+  static final _validVoiceValues = _voiceIndex.keys.toSet();
+
   List<VoiceInfo> get _filteredVoices {
     if (_isScanningVoices) return [];
-    // 扫描失败时回退到内置全量表，保证界面仍可用（以前会永远返回空列表）
-    final available = _voiceScanFailed ? <String>{} : _availableVoices;
+    // 「扫描失败」和「扫描成功但返回 0 条」必须分开看：
+    //
+    // - 失败（含找不到 sayit-poc）：退回内置全量表，保证界面仍可用。
+    // - 成功但 0 条：说明 edge_tts 环境本身坏了（没装 / 版本不兼容），
+    //   此时把全量表摊开等于把一堆不可用的音色推给用户去挨个踩，
+    //   所以同样按"不可用"处理，状态栏也要如实说明是 0 个而不是"已扫描 N 个"。
+    final useFullTable = _voiceScanFailed || _availableVoices.isEmpty;
     return voiceData
         .where((v) =>
             v.languageCode == _selectedLanguage && v.gender == _selectedGender)
-        .where((v) => available.isEmpty || available.contains(v.value))
+        .where((v) => useFullTable || _availableVoices.contains(v.value))
         .toList();
   }
 
@@ -197,9 +261,59 @@ class _SayItHomePageState extends State<SayItHomePage> {
     return values.contains(_selectedVoice) ? _selectedVoice : null;
   }
 
+  /// 语言下拉实际使用的列表：**只列当前真的有可用音色的语言**。
+  ///
+  /// 内置音色表里约有三分之一（实测 131 条中 42 条）已经被 Edge 下线。
+  /// 扫描成功后这些会被 [_filteredVoices] 过滤掉，于是某些语言会一个音色
+  /// 都不剩 —— 用户在语言下拉里选得进去，却永远合不出声音。
+  /// 实测受影响的组合有 7 个（zh-TW/男、en-AU/男、en-ZA/女、ar-SA/男女、
+  /// da-DK/女、hi-IN/女），其中阿拉伯语整个语言都不可用。
+  /// 所以语言列表要和音色一起收敛，不给用户选完就卡死的组合。
+  List<Map<String, String>> get _availableLanguages {
+    if (_isScanningVoices) return const [];
+    final table = (_voiceScanFailed || _availableVoices.isEmpty)
+        ? voiceData
+        : voiceData.where((v) => _availableVoices.contains(v.value));
+    final codes = table.map((v) => v.languageCode).toSet();
+    return languages.where((l) => codes.contains(l['code'])).toList();
+  }
+
+  /// 性别下拉实际使用的列表：在**当前语言**下真的还有音色的性别。
+  List<Map<String, String>> get _availableGenders {
+    if (_isScanningVoices) return const [];
+    final present = _filteredVoices.map((v) => v.gender).toSet();
+    return genders.where((g) => present.contains(g['code'])).toList();
+  }
+
+  /// 收敛当前的语言 / 性别 / 音色，使三者自洽且当前真的有音色可用。
+  ///
+  /// 调用时机：语音扫描出结果之后、语言或性别下拉变更之后。
+  void _reconcileSelection() {
+    final langs = _availableLanguages;
+    if (langs.isEmpty) return;
+
+    if (!langs.any((l) => l['code'] == _selectedLanguage)) {
+      _selectedLanguage = langs.first['code']!;
+    }
+
+    final gs = _availableGenders;
+    if (gs.isNotEmpty && !gs.any((g) => g['code'] == _selectedGender)) {
+      _selectedGender = gs.first['code']!;
+    }
+
+    // 只在当前音色真的不可用时才换。否则会把用户（从 SharedPreferences
+    // 或设定文件）读回来的、仍然有效的音色又覆盖成列表里的第一个。
+    final voices = _filteredVoices;
+    if (voices.isNotEmpty && !voices.any((v) => v.value == _selectedVoice)) {
+      _selectedVoice = voices.first.value;
+    }
+  }
+
   @override
   void initState() {
     super.initState();
+    // 设置先起加载，扫描音色要等它完成（见 [_scanVoices]）
+    _settingsLoaded = _loadSettings();
     _scanVoices();
     _loadExportPath();
     _playerStateSub = _audioPlayer.playerStateStream.listen((state) {
@@ -212,7 +326,11 @@ class _SayItHomePageState extends State<SayItHomePage> {
       if (!mounted) return;
       setState(() {
         _currentPosition = position;
-        _currentSentenceIndex = _sentenceIndexAt(position);
+        // 试听单句时音源与整篇偏移表不匹配，跳过高亮更新，
+        // 否则高亮会被 [_sentenceIndexAt] 拉到第 1 句。
+        if (!_isPreviewing) {
+          _currentSentenceIndex = _sentenceIndexAt(position);
+        }
       });
     });
     _durationSub = _audioPlayer.durationStream.listen((duration) {
@@ -223,23 +341,36 @@ class _SayItHomePageState extends State<SayItHomePage> {
     });
   }
 
-  /// 按播放位置定位当前句。
+  /// 按播放位置定位当前句：找最后一个 offset ≤ posMs 的下标。
+  ///
+  /// 用二分而不是线性扫：`positionStream` 每个 tick 都会调这里，
+  /// 长文本（几百句）线性扫是 O(n) × tick 数。
   int _sentenceIndexAt(Duration position) {
     final posMs = position.inMilliseconds;
-    if (_sentenceAudioOffsetsMs.isEmpty) return 0;
-    var index = 0;
-    for (var i = 0; i < _sentenceAudioOffsetsMs.length; i++) {
-      if (posMs >= _sentenceAudioOffsetsMs[i]) {
-        index = i;
+    final offsets = _sentenceAudioOffsetsMs;
+    if (offsets.isEmpty) return 0;
+    var lo = 0;
+    var hi = offsets.length - 1;
+    var result = 0;
+    while (lo <= hi) {
+      final mid = (lo + hi) >> 1;
+      if (offsets[mid] <= posMs) {
+        result = mid;
+        lo = mid + 1;
       } else {
-        break;
+        hi = mid - 1;
       }
     }
-    return index;
+    return result;
   }
 
   @override
   void dispose() {
+    _persistTimer?.cancel();
+    _previewToken++;
+    // 窗口关闭时如果还有合成在跑，别把它留成孤儿进程。
+    _cancelRequested = true;
+    _activePocProcess?.kill();
     _playerStateSub?.cancel();
     _positionSub?.cancel();
     _durationSub?.cancel();
@@ -307,7 +438,30 @@ class _SayItHomePageState extends State<SayItHomePage> {
     }
 
     try {
+      // 先单独问一次环境。sayit-poc 以前在**每次**合成前都做同样的检查，
+      // 而应用是逐句合成的 —— 于是一句文本要额外拉起 2 个 Python 进程
+      // （查版本 + 查 edge_tts），20 句就是 40 次纯开销。
+      // 这里改成启动时做一次，检查结果和提示文案都留给用户看。
+      final env = await Process.run(pocBinary, ['--check-env']);
+      if (!mounted) return;
+      if (env.exitCode != 0) {
+        final detail = (env.stderr as String?)?.trim() ?? '';
+        if (detail.isNotEmpty) {
+          setState(() {
+            _isScanningVoices = false;
+            _voiceScanFailed = true;
+            _statusMessage = '运行环境有问题：${sanitizeTtsError(detail)}';
+          });
+          return;
+        }
+      }
+
       final result = await Process.run(pocBinary, ['--list-voices']);
+      if (!mounted) return;
+
+      // 等设置读盘完成再决定默认音色，否则这里的修正会把用户存下来的
+      // 音色又覆盖回内置默认值。
+      await _settingsLoaded;
       if (!mounted) return;
 
       // 以前只有 exitCode == 0 才更新状态：非零退出（例如 Python 装了但没装
@@ -321,14 +475,18 @@ class _SayItHomePageState extends State<SayItHomePage> {
         setState(() {
           _availableVoices = available;
           _isScanningVoices = false;
-          _voiceScanFailed = false;
-          if (!_availableVoices.contains(_selectedVoice)) {
-            final filtered = _filteredVoices;
-            if (filtered.isNotEmpty) {
-              _selectedVoice = filtered.first.value;
-            }
-          }
-          _statusMessage = '已扫描 ${_availableVoices.length} 个可用语音';
+          // 「扫描成功但一条都没有」和「扫描失败」要分开：
+          // 前者说明 edge_tts 环境本身坏了，界面不能装作扫到了东西，
+          // 状态栏必须如实说 0 个，并退回内置表让界面还能用。
+          _voiceScanFailed = available.isEmpty;
+          // 语言 / 性别 / 音色三者一起收敛：既要音色在扫描结果里，
+          // 也要通过当前语言+性别的筛选，否则会出现"语言显示日语、
+          // 音色却是中文"的错位。
+          _reconcileSelection();
+          _statusMessage = available.isEmpty
+              ? '扫描到 0 个可用语音：edge_tts 可能未安装或版本不兼容，'
+                  '已退回内置音色表'
+              : '已扫描 ${available.length} 个可用语音';
         });
       } else {
         final detail = (result.stderr as String?)?.trim() ?? '';
@@ -336,7 +494,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
           _isScanningVoices = false;
           _voiceScanFailed = true;
           _statusMessage = '语音扫描失败（exit=${result.exitCode}）'
-              '${detail.isNotEmpty ? '：$detail' : ''}';
+              '${detail.isNotEmpty ? '：${sanitizeTtsError(detail)}' : ''}';
         });
       }
     } catch (e) {
@@ -374,7 +532,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
     final volumeStr =
         volumePercent >= 0 ? '+$volumePercent%' : '$volumePercent%';
 
-    final result = await Process.run(
+    // 用 Process.start 而不是 Process.run：要留住句柄，「停止」才能 kill。
+    // 以前是 Process.run（阻塞等待、拿不到句柄），合成过程中按「停止」毫无反应。
+    final process = await Process.start(
       pocBinary,
       [
         '--synthesize-text=$encodedText',
@@ -382,22 +542,43 @@ class _SayItHomePageState extends State<SayItHomePage> {
         '--rate=$rate',
         '--pitch=$pitchStr',
         '--volume=$volumeStr',
-        '--ssml-base64',
+        '--text-base64',
       ],
     );
+    _activePocProcess = process;
 
-    if (result.exitCode != 0) {
-      final err = (result.stderr as String?)?.trim() ?? '';
-      throw Exception('合成失败（exit=${result.exitCode}）'
-          '${err.isNotEmpty ? '：$err' : ''}');
+    final String stdout;
+    final String stderr;
+    final int exitCode;
+    try {
+      // stdout 装的是整段音频的 base64，量很大。必须和 exitCode 并行收，
+      // 先 await exitCode 的话管道会被写满、子进程卡住不死锁。
+      final outFuture = process.stdout.transform(utf8.decoder).join();
+      final errFuture = process.stderr.transform(utf8.decoder).join();
+      exitCode = await process.exitCode;
+      stdout = await outFuture;
+      stderr = await errFuture;
+    } finally {
+      _activePocProcess = null;
     }
 
-    final stdout = (result.stdout as String).trim();
-    if (stdout.isEmpty) {
+    // 被「停止」kill 掉的子进程退出码是 -9，别当成合成失败报给用户。
+    if (_cancelRequested) {
+      throw const _CancelledException();
+    }
+
+    if (exitCode != 0) {
+      // 原样抛会把 edge_tts 的完整请求 URL（含 DRM 令牌）带进状态栏 ——
+      // 实测一次 403 的原始报错 397 字符里 362 个是用户用不上的 URL。
+      throw Exception(sanitizeTtsError(stderr));
+    }
+
+    final out = stdout.trim();
+    if (out.isEmpty) {
       throw Exception('合成失败：sayit-poc 没有输出');
     }
 
-    final json = jsonDecode(stdout) as Map<String, dynamic>;
+    final json = jsonDecode(out) as Map<String, dynamic>;
 
     final audioBase64 = json['audio_base64'] as String? ?? '';
     if (audioBase64.isEmpty) {
@@ -449,6 +630,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
     for (var i = 0; i < sentences.length; i++) {
       if (!mounted) throw const _CancelledException();
+      // 用户按了「停止」：别再发起下一句的子进程。
+      if (_cancelRequested) throw const _CancelledException();
       setState(() {
         _statusMessage = '$progressPrefix第 ${i + 1}/${sentences.length} 句';
       });
@@ -457,7 +640,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
       final result = await _synthesizeText(
           sentence.text, _selectedVoice, _speed, _pitch, _volume);
 
-      // 起始时间 = 已写入字节数换算出的毫秒（CBR 字节→毫秒是精确的）。
+      // 起始时间 = 已写入字节数换算出的毫秒（近似，偏差见 _kBytesPerMs 的说明）。
       // 以前用「最后一条 boundary 的结束时间」累加，忽略了每句开头的静音/前导，
       // 句数一多高亮就越来越滞后。
       offsets.add(_bytesToMs(bytes.length));
@@ -474,6 +657,42 @@ class _SayItHomePageState extends State<SayItHomePage> {
   /// 这是固定常量，所以这里没有"采样率/声道"参数。
   static int _bytesToMs(int bytes) {
     return (bytes * 1000 / _kBytesPerMs).round();
+  }
+
+  /// 合成结果的输入指纹：音色 + 三个参数 + 每句文本。
+  /// 用来判断缓存的 [_cachedMixed] 还能不能用。
+  String _synthFingerprint(List<Sentence> sentences) {
+    return [
+      _selectedVoice,
+      _speed,
+      _pitch,
+      _volume,
+      for (final s in sentences) s.text,
+    ].join('\u0000');
+  }
+
+  /// 带缓存的 [_mixSentences]。
+  ///
+  /// 以前「导出」会无条件把整篇重新合成一遍 —— 用户先「生成并播放」再
+  /// 「导出」，同样的文本就被完整合成两次，每遍都是 N 次网络请求。
+  /// 这里按输入指纹缓存一份，参数或文本一变就自动失效。
+  Future<_MixedAudio> _mixedAudioFor(
+    List<Sentence> sentences, {
+    String progressPrefix = '正在合成',
+  }) async {
+    final fingerprint = _synthFingerprint(sentences);
+    final cached = _cachedMixed;
+    if (_cachedFingerprint == fingerprint && cached != null) {
+      if (mounted) {
+        setState(() => _statusMessage = '复用已生成的音频，无需重新合成');
+      }
+      return cached;
+    }
+
+    final mixed = await _mixSentences(sentences, progressPrefix: progressPrefix);
+    _cachedMixed = mixed;
+    _cachedFingerprint = fingerprint;
+    return mixed;
   }
 
   // ── 分句 / 播放 ───────────────────────────────────────────────────────
@@ -516,10 +735,16 @@ class _SayItHomePageState extends State<SayItHomePage> {
       _isGenerating = true;
       _statusMessage = '正在生成...';
     });
+    _cancelRequested = false;
 
     try {
-      final mixed = await _mixSentences(_sentences);
+      // 开始新一轮合成前把旧音频停掉。以前是等新音源 setAudioSource 才换掉，
+      // 结果合成全程旧音频还在放，听起来像"点了没反应"。
+      await _audioPlayer.stop();
+
+      final mixed = await _mixedAudioFor(_sentences);
       if (!mounted) return;
+      if (_cancelRequested) throw const _CancelledException();
 
       _sentenceAudioOffsetsMs = mixed.sentenceOffsetsMs;
       await _audioPlayer.setAudioSource(
@@ -534,7 +759,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
       await _audioPlayer.play();
     } on _CancelledException {
-      // 界面已销毁，忽略
+      if (mounted) {
+        setState(() => _statusMessage = '已取消合成');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -546,6 +773,33 @@ class _SayItHomePageState extends State<SayItHomePage> {
           _isGenerating = false;
         });
       }
+    }
+  }
+
+  /// 「停止」：既要停播放，也要中断正在进行的合成。
+  ///
+  /// 以前只停播放器 —— 合成跑在 `Process.run` 里，拿不到句柄，
+  /// 用户按停止毫无反应，只能干等整篇合成完（或者关窗口）。
+  Future<void> _stop() async {
+    if (_isGenerating || _isExporting) {
+      _cancelRequested = true;
+      // kill 掉当前那一个 sayit-poc；循环会在下一句开头发现标志并退出。
+      _activePocProcess?.kill();
+      if (mounted) {
+        setState(() => _statusMessage = '正在取消...');
+      }
+    }
+    // 试听/播放的进度：让待播的试听结果作废
+    _previewToken++;
+    await _audioPlayer.stop();
+    if (mounted) {
+      setState(() {
+        _currentSentenceIndex = -1;
+        _isPreviewing = false;
+        if (!_isGenerating && !_isExporting) {
+          _statusMessage = '已停止';
+        }
+      });
     }
   }
 
@@ -577,11 +831,15 @@ class _SayItHomePageState extends State<SayItHomePage> {
       _isExporting = true;
       _statusMessage = '正在导出...';
     });
+    _cancelRequested = false;
 
     try {
       final sentences = List<Sentence>.from(_sentences);
-      final mixed = await _mixSentences(sentences, progressPrefix: '正在导出');
+      // 走带缓存的版本：刚「生成并播放」完就点导出时，直接复用那份音频，
+      // 不再把整篇重新合成一遍（每遍都是 N 次网络请求）。
+      final mixed = await _mixedAudioFor(sentences, progressPrefix: '正在导出');
       if (!mounted) return;
+      if (_cancelRequested) throw const _CancelledException();
 
       final mp3Bytes = mixed.bytes;
 
@@ -625,7 +883,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
         _statusMessage = '已导出：$filePath';
       });
     } on _CancelledException {
-      // 界面已销毁，忽略
+      if (mounted) {
+        setState(() => _statusMessage = '已取消导出');
+      }
     } catch (e) {
       if (!mounted) return;
       setState(() {
@@ -659,24 +919,43 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
     try {
       final bytes = await File(path).readAsBytes();
-      String content;
-      try {
-        // 严格解码：UTF-8 非法字节会抛异常，而不是悄悄塞一堆 U+FFFD
-        content = utf8.decode(bytes);
-      } catch (_) {
+
+      // UTF-8 / UTF-16 / GB18030 依次自动识别（见 src/text_decoder.dart）。
+      // 以前这里只有 UTF-8 成功或失败两条路，失败就只剩 Latin-1 兜底 ——
+      // 而 Latin-1 对 GBK 是按字节一对一映射，中文必然变乱码，
+      // 等于中文用户根本没法导入 txt。现在 GB18030 能自动读进来。
+      final auto = tryDecodeText(bytes);
+      late final String content;
+      if (auto != null) {
+        content = auto.text;
+        // 上面刚 await 过 readAsBytes，界面可能已经销毁 —— setState 前必须判
         if (!mounted) return;
+        if (auto.encoding != 'UTF-8') {
+          setState(() => _statusMessage = '已按 ${auto.encoding} 解码该文件');
+        }
+      } else {
+        // 两种都解不了（或 GB18030 解出来明显不像文字）——弹窗让用户选。
+        if (!mounted) return;
+        final gbBytes = tryDecodeGb18030(bytes);
         final choice = await showDialog<String>(
           context: context,
           builder: (context) => AlertDialog(
-            title: const Text('无法识别文本编码'),
-            content: const Text(
-                '该文件不是有效的 UTF-8 文本（可能是 GBK/GB18030 编码）。\n\n'
-                '要按 Latin-1 强行读取吗？中文会显示为乱码。'),
+            title: const Text('无法自动识别文本编码'),
+            content: Text(
+                '这个文件既不是 UTF-8，${gbBytes != null ? '按 GB18030 解出来也不像正常文字' : 'GB18030 也解不了'}。\n\n'
+                '如果是中文 Windows 导出的旧文件，可以按 GB18030 读取；'
+                '如果是西欧语言的旧文件（如 Windows-1252），选 Latin-1。\n'
+                '都不对的话，建议用编辑器另存为 UTF-8 再导入。'),
             actions: [
               TextButton(
                 onPressed: () => Navigator.pop(context, 'cancel'),
                 child: const Text('取消'),
               ),
+              if (gbBytes != null)
+                TextButton(
+                  onPressed: () => Navigator.pop(context, 'gb18030'),
+                  child: const Text('按 GB18030 读取'),
+                ),
               TextButton(
                 onPressed: () => Navigator.pop(context, 'latin1'),
                 child: const Text('按 Latin-1 读取'),
@@ -684,13 +963,13 @@ class _SayItHomePageState extends State<SayItHomePage> {
             ],
           ),
         );
-        if (choice != 'latin1') return;
-        content = latin1.decode(bytes);
-      }
-
-      // 去掉 UTF-8 BOM
-      if (content.isNotEmpty && content.codeUnitAt(0) == 0xFEFF) {
-        content = content.substring(1);
+        if (choice == null || choice == 'cancel') return;
+        content = choice == 'gb18030'
+            ? (gbBytes ?? '')
+            : latin1.decode(bytes);
+        if (mounted) {
+          setState(() => _statusMessage = '已按 $choice 解码该文件');
+        }
       }
 
       if (!mounted) return;
@@ -721,7 +1000,6 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
       final validLanguageCodes = languages.map((l) => l['code']!).toSet();
       final validGenders = {'female', 'male'};
-      final validVoiceValues = voiceData.map((v) => v.value).toSet();
 
       final importedVoice = settings['voice'] as String?;
       final importedLanguage = settings['language'] as String?;
@@ -777,19 +1055,34 @@ class _SayItHomePageState extends State<SayItHomePage> {
       }
 
       if (!mounted) return;
+
+      // 音色与语言/性别必须自洽。设定文件里三个字段是平级的，以前各自
+      // 校验后独立写入，于是一份 "voice=中文音色 + language=日语" 的文件
+      // 导入后：语言下拉显示日语、音色下拉显示"无可用语音"，但合成照常用
+      // 那个中文音色去读日语文本 —— 界面和实际行为对不上。
+      //
+      // 这里以音色为准反推语言/性别（音色是唯一真正决定声音的字段），
+      // 只有音色缺失或非法时才退回文件里写明的语言/性别。
+      final matched =
+          importedVoice == null ? null : _voiceIndex[importedVoice];
+      final wantLanguage = matched?.languageCode ?? importedLanguage;
+      final wantGender = matched?.gender ?? importedGender;
+
       setState(() {
-        // 语言 / 性别是独立字段，不能只在"语音合法"时才更新 ——
+        // 语言 / 性别是独立字段，不能只在"音色合法"时才更新 ——
         // 以前它们被包在 `if (importedVoice != null && valid)` 里，
-        // 只导语言/性别不导语音时会静默失效。
-        if (importedLanguage != null &&
-            validLanguageCodes.contains(importedLanguage)) {
-          _selectedLanguage = importedLanguage;
+        // 只导语言/性别不导音色时会静默失效。
+        if (wantLanguage != null && validLanguageCodes.contains(wantLanguage)) {
+          _selectedLanguage = wantLanguage;
         }
-        if (importedGender != null && validGenders.contains(importedGender)) {
-          _selectedGender = importedGender;
+        if (wantGender != null && validGenders.contains(wantGender)) {
+          _selectedGender = wantGender;
         }
-        if (importedVoice != null && validVoiceValues.contains(importedVoice)) {
-          _selectedVoice = importedVoice;
+        if (matched != null) {
+          _selectedVoice = matched.value;
+        } else if (importedVoice != null) {
+          // 文件里的音色已经不在内置表里（多半是被 Edge 下线了）
+          _voiceRejects.add(importedVoice);
         }
         if (importedSpeed != null &&
             importedSpeed >= 0.5 &&
@@ -810,11 +1103,35 @@ class _SayItHomePageState extends State<SayItHomePage> {
             (finalExportPath != null && finalExportPath.isNotEmpty)
                 ? finalExportPath
                 : null;
+        // 设定文件没带音色（或带了个已下线的）时，语言/性别可能变了而音色没变，
+        // 那样又是"语言显示日语、音色是中文"的错位。这里统一收敛一次。
+        _reconcileSelection();
       });
 
+      // 导入完立刻落盘，省得用户下次启动还得重新导一次
+      _schedulePersist();
+
       if (!mounted) return;
+      // 如实说明哪些字段没生效，而不是一律报「设定已导入」
+      final notes = <String>[];
+      if (_voiceRejects.isNotEmpty) {
+        notes.add('音色 ${_voiceRejects.join('、')} 不在当前音色表里（可能已被 Edge 下线），已忽略');
+      }
+      final swapped = matched != null &&
+          ((importedLanguage != null && importedLanguage != matched.languageCode) ||
+              (importedGender != null && importedGender != matched.gender));
+      if (swapped) {
+        notes.add('文件里的语言/性别与音色不一致，已按音色修正');
+      }
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('设定已导入')),
+        SnackBar(
+          content: Text(
+            notes.isEmpty ? '设定已导入' : '设定已导入，但有调整：${notes.join('；')}',
+          ),
+          duration: notes.isEmpty
+              ? const Duration(seconds: 2)
+              : const Duration(seconds: 6),
+        ),
       );
     } catch (e) {
       if (!mounted) return;
@@ -846,6 +1163,63 @@ class _SayItHomePageState extends State<SayItHomePage> {
         _exportPath = saved;
       });
     }
+  }
+
+  /// 读回上次的音色 / 语言 / 性别 / 语速 / 音高 / 音量。
+  ///
+  /// 以前这些只在内存里，退出即丢，用户每次重启都要重设语速和音色
+  /// （明明「导出设定」就能存，偏要手动走文件）。这里和导出路径一样落盘。
+  Future<void> _loadSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    if (!mounted) return;
+
+    // SharedPreferences 里可能被外部改坏（手改文件、旧版本遗留），
+    // 每一项都要重新校验范围，不能直接信。
+    double? clampNum(num? v, double min, double max, double fallback) {
+      if (v == null) return fallback;
+      final d = v.toDouble();
+      if (d.isNaN || d < min || d > max) return fallback;
+      return d;
+    }
+
+    setState(() {
+      final lang = prefs.getString(_kLanguageKey);
+      if (lang != null && _validLanguageCodes.contains(lang)) {
+        _selectedLanguage = lang;
+      }
+      final gender = prefs.getString(_kGenderKey);
+      if (gender != null && _validGenders.contains(gender)) {
+        _selectedGender = gender;
+      }
+      final voice = prefs.getString(_kVoiceKey);
+      if (voice != null && _validVoiceValues.contains(voice)) {
+        _selectedVoice = voice;
+      }
+      _speed = clampNum(prefs.getDouble(_kSpeedKey), 0.5, 2.0, 1.0)!;
+      _pitch = clampNum(prefs.getDouble(_kPitchKey), -1.0, 1.0, 0.0)!;
+      _volume = clampNum(prefs.getDouble(_kVolumeKey), 0.0, 2.0, 1.0)!;
+    });
+  }
+
+  /// 合并连续改动后再落盘。
+  ///
+  /// 三个滑块的 onChanged 每拖动一帧就触发，直接写 SharedPreferences
+  /// 会在一次拖动里写几百次。
+  void _schedulePersist() {
+    _persistTimer?.cancel();
+    _persistTimer = Timer(const Duration(milliseconds: 500), () {
+      if (mounted) _persistSettings();
+    });
+  }
+
+  Future<void> _persistSettings() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString(_kVoiceKey, _selectedVoice);
+    await prefs.setString(_kLanguageKey, _selectedLanguage);
+    await prefs.setString(_kGenderKey, _selectedGender);
+    await prefs.setDouble(_kSpeedKey, _speed);
+    await prefs.setDouble(_kPitchKey, _pitch);
+    await prefs.setDouble(_kVolumeKey, _volume);
   }
 
   Future<void> _exportSettings() async {
@@ -891,6 +1265,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
             children: [
               Text('【文本输入】', style: TextStyle(fontWeight: FontWeight.bold)),
               Text('在文本框中输入或粘贴要朗读的文字，点击"分句"进行分段。'),
+              Text('也可以从工具栏的文件夹图标导入 .txt 文件；'
+                  'UTF-8、UTF-16、GB18030（中文 Windows 导出的旧文件）'
+                  '都能自动识别。'),
               SizedBox(height: 12),
               Text('【强调标记】', style: TextStyle(fontWeight: FontWeight.bold)),
               Text('用 [!文字!] 包裹需要强调的内容。标记会被自动去掉，只朗读内部文字。'),
@@ -899,14 +1276,16 @@ class _SayItHomePageState extends State<SayItHomePage> {
               Text('顶部可选择语言、性别和具体语音。下方的滑块可调节语速、音高和音量。'),
               SizedBox(height: 12),
               Text('【播放控制】', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('点击"生成并播放"合成并播放语音。播放过程中可暂停、继续或停止。'),
-              Text('句末标点决定句间停顿：。！？ 500ms，； 300ms，, . ; : 200ms。'),
+              Text('点击"生成并播放"合成并播放语音。播放过程中可暂停、继续或停止；'
+                  '正在合成时按"停止"会中断本次合成。'),
+              Text('点击列表中的任意一句可单独试听该句。'),
               SizedBox(height: 12),
               Text('【导出音频】', style: TextStyle(fontWeight: FontWeight.bold)),
-              Text('点击文件夹图标设置导出位置，然后点击"导出"保存为 WAV 文件。'),
-              Text('文件名格式：序号_前10个字.wav'),
-              Text('说明：为保证句间停顿与高亮时间轴精确，内部使用 24kHz 16bit 单声道 PCM，'
-                  '因此导出为无损 WAV 而不是 MP3。'),
+              Text('点击文件夹图标设置导出位置，然后点击"导出"保存为 MP3 文件。'),
+              Text('文件名格式：序号_前10个字.mp3'),
+              Text('说明：edge_tts 的输出格式固定为 MP3（24kHz / 48kbps / 单声道），'
+                  '应用无法更改。句与句之间不插入静音，'
+                  '句间停顿由 TTS 在句末标点后自然处理。'),
               SizedBox(height: 12),
               Text('【导入/导出设置】', style: TextStyle(fontWeight: FontWeight.bold)),
               Text('可保存当前语音设置为 JSON 文件，或从文件恢复设置。'),
@@ -968,7 +1347,10 @@ class _SayItHomePageState extends State<SayItHomePage> {
   @override
   Widget build(BuildContext context) {
     final totalMs = _totalDuration.inMilliseconds;
-    final canSeek = _isPlaying || totalMs > 0;
+    // 合成/导出过程中「停止」也必须可点：以前它只连着播放器，
+    // 合成时按下去毫无反应，界面看着像卡死。
+    final busy = _isGenerating || _isExporting;
+    final canStop = busy || _isPlaying || totalMs > 0;
 
     return Scaffold(
       appBar: AppBar(
@@ -1048,9 +1430,9 @@ class _SayItHomePageState extends State<SayItHomePage> {
                           ),
                           const SizedBox(width: 8),
                           IconButton(
-                            onPressed: canSeek ? () => _audioPlayer.stop() : null,
+                            onPressed: canStop ? _stop : null,
                             icon: const Icon(Icons.stop),
-                            tooltip: '停止',
+                            tooltip: busy ? '取消合成' : '停止',
                           ),
                           const SizedBox(width: 8),
                           IconButton(
@@ -1066,40 +1448,60 @@ class _SayItHomePageState extends State<SayItHomePage> {
                             label: const Text('导出'),
                           ),
                           const SizedBox(width: 16),
+                          // 语言/性别下拉都按"当前真的有可用音色"收敛。
+                          // 只列有音色的语言/性别，用户才不会选到一个永远
+                          // 合成不出来的组合（内置表里约三分之一音色已被
+                          // Edge 下线，不收敛的话阿拉伯语整个语言都是死的）。
                           DropdownButton<String>(
-                            value: _selectedLanguage,
-                            items: languages
+                            value: _availableLanguages
+                                    .any((l) => l['code'] == _selectedLanguage)
+                                ? _selectedLanguage
+                                : null,
+                            hint: const Text('无可用语言',
+                                style: TextStyle(fontSize: 12)),
+                            items: _availableLanguages
                                 .map((l) => DropdownMenuItem(
                                       value: l['code'],
                                       child: Text(l['name']!,
                                           style: const TextStyle(fontSize: 12)),
                                     ))
                                 .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _selectedLanguage = value;
-                                _pickDefaultVoice();
-                              });
-                            },
+                            onChanged: _availableLanguages.isEmpty
+                                ? null
+                                : (value) {
+                                    if (value == null) return;
+                                    setState(() {
+                                      _selectedLanguage = value;
+                                      _reconcileSelection();
+                                    });
+                                    _schedulePersist();
+                                  },
                           ),
                           const SizedBox(width: 4),
                           DropdownButton<String>(
-                            value: _selectedGender,
-                            items: genders
+                            value: _availableGenders
+                                    .any((g) => g['code'] == _selectedGender)
+                                ? _selectedGender
+                                : null,
+                            hint: const Text('无可用性别',
+                                style: TextStyle(fontSize: 12)),
+                            items: _availableGenders
                                 .map((g) => DropdownMenuItem(
                                       value: g['code'],
                                       child: Text(g['name']!,
                                           style: const TextStyle(fontSize: 12)),
                                     ))
                                 .toList(),
-                            onChanged: (value) {
-                              if (value == null) return;
-                              setState(() {
-                                _selectedGender = value;
-                                _pickDefaultVoice();
-                              });
-                            },
+                            onChanged: _availableGenders.isEmpty
+                                ? null
+                                : (value) {
+                                    if (value == null) return;
+                                    setState(() {
+                                      _selectedGender = value;
+                                      _pickDefaultVoice();
+                                    });
+                                    _schedulePersist();
+                                  },
                           ),
                           const SizedBox(width: 4),
                           SizedBox(
@@ -1124,13 +1526,14 @@ class _SayItHomePageState extends State<SayItHomePage> {
                                   : (value) {
                                       if (value == null) return;
                                       setState(() => _selectedVoice = value);
+                                      _schedulePersist();
                                     },
                             ),
                           ),
                         ],
                       ),
                     ),
-                    if (canSeek)
+                    if (canStop)
                       Padding(
                         padding: const EdgeInsets.symmetric(vertical: 8),
                         child: SizedBox(
@@ -1180,6 +1583,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
                               setState(() {
                                 _speed = value;
                               });
+                              // 拖动过程中每帧都会进来，合并后再落盘
+                              _schedulePersist();
                             },
                           ),
                         ),
@@ -1202,6 +1607,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
                               setState(() {
                                 _pitch = value;
                               });
+                              // 拖动过程中每帧都会进来，合并后再落盘
+                              _schedulePersist();
                             },
                           ),
                         ),
@@ -1224,6 +1631,8 @@ class _SayItHomePageState extends State<SayItHomePage> {
                               setState(() {
                                 _volume = value;
                               });
+                              // 拖动过程中每帧都会进来，合并后再落盘
+                              _schedulePersist();
                             },
                           ),
                         ),
@@ -1254,10 +1663,26 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
                     return GestureDetector(
                       onTap: () async {
+                        // 合成/导出进行中不允许试听：试听会另起一个
+                        // sayit-poc 并换掉播放器音源，把正在拼接的音频冲掉。
+                        if (_isGenerating || _isExporting) return;
+                        // 令牌：连续快速点不同句子时，只有最后一次的结果会被播放
+                        final token = ++_previewToken;
                         setState(() => _currentSentenceIndex = index);
+                        // 试听用的是单句音源，而 [_sentenceAudioOffsetsMs]
+                        // 是整篇的偏移表；不置位的话 positionStream 会用整篇
+                        // 偏移算高亮，单句音频从 0ms 开始 → 高亮被拉到第 1 句。
+                        _isPreviewing = true;
                         try {
                           final result = await _synthesizeText(sentence.text,
                               _selectedVoice, _speed, _pitch, _volume);
+                          // 等待期间可能又点了别的句子，或开始了合成 → 丢弃本次结果
+                          if (!mounted ||
+                              token != _previewToken ||
+                              _isGenerating ||
+                              _isExporting) {
+                            return;
+                          }
                           await _audioPlayer.setAudioSource(
                             _BytesAudioSource(result.audio),
                           );
@@ -1267,6 +1692,10 @@ class _SayItHomePageState extends State<SayItHomePage> {
                           setState(() {
                             _statusMessage = '试听失败：$e';
                           });
+                        } finally {
+                          if (token == _previewToken) {
+                            _isPreviewing = false;
+                          }
                         }
                       },
                       child: Container(

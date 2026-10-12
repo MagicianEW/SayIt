@@ -65,7 +65,13 @@ pub enum EdgeError {
 /// 单次合成的请求。
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SynthesizeRequest {
-    pub ssml: String,
+    /// 要朗读的内容。
+    ///
+    /// 正常路径上传的是**纯文本**（不是 SSML）：`edge_tts.Communicate` 第一个
+    /// 参数收纯文本后会自己转义并套上 SSML 模板，rate/pitch/volume 由
+    /// Communicate 的关键字参数注入。早先这里叫 `ssml`、CLI 开关叫
+    /// `--ssml-base64`，很容易让人以为可以直接塞一份 SSML 进去。
+    pub text: String,
     pub config: EdgeConfig,
 }
 
@@ -292,7 +298,7 @@ impl EdgeClient {
             EdgeError::StdinWrite("stdin not available".to_string())
         })?;
         let req_json = serde_json::json!({
-            "ssml": req.ssml,
+            "text": req.text,
             "voice": req.config.voice,
             "pitch": req.config.pitch,
             "rate": req.config.rate,
@@ -500,7 +506,7 @@ impl Default for EdgeClient {
 
 /// 同步封装：内部自建 tokio runtime 并 block_on，方便在非 async 上下文调用。
 pub fn synthesize_sync(
-    ssml: String,
+    text: String,
     voice: String,
     pitch: String,
     rate: String,
@@ -508,7 +514,7 @@ pub fn synthesize_sync(
 ) -> Result<SynthesizeResult, String> {
     let client = EdgeClient::new();
     let req = SynthesizeRequest {
-        ssml,
+        text,
         config: EdgeConfig {
             voice,
             pitch,
@@ -568,7 +574,7 @@ async def main():
         print(f"ERROR bad request json: {e}", flush=True)
         sys.exit(1)
 
-    ssml_or_text = req.get("ssml", "")
+    text = req.get("text", "")
     rate = req.get("rate", "+0%")
     pitch = req.get("pitch", "+0Hz")
     volume = req.get("volume", "+0%")
@@ -578,7 +584,7 @@ async def main():
         # （7.x 在 communicate.py 里把 "outputFormat":"audio-24khz-48kbitrate-mono-mp3"
         #  写死）。传这个关键字会直接 TypeError。输出格式不可配置，只能如实上报。
         comm = edge_tts.Communicate(
-            ssml_or_text,
+            text,
             voice=voice,
             boundary="WordBoundary",
             rate=rate,

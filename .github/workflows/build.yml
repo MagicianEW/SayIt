@@ -35,6 +35,44 @@ env:
 #   应用名同理，由 scripts/sync_app_name.py 统一同步到各平台元数据。
 
 jobs:
+  # ── 质量门禁 ───────────────────────────────────────────────────────────
+  # 以前四个 job 全是「装依赖 → 编译 → 打包 → 上传」，一条测试都没跑：
+  # 仓库里 3 个测试文件从不执行，sync_*.py --check 也从未被调用过。
+  # 结果就是分句规则改了、版本号手改了、帮助文案与实际行为相反了，CI 照样全绿。
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Verify version and app name are in sync
+        # 改了 pubspec.yaml / Cargo.toml / build_info.dart / 各平台元数据
+        # 却没改仓库根的 VERSION（或没跑 sync 脚本），这里就会拦下来。
+        run: |
+          python3 scripts/sync_version.py --check
+          python3 scripts/sync_app_name.py --check
+
+      - name: Analyze Dart
+        # 只对 error 失败：仓库里有历史遗留的 lint 提示，
+        # 一上来就 fatal 会让门禁变成摆设。真正的编译错误仍然会拦住。
+        run: flutter analyze --no-fatal-warnings --no-fatal-infos
+        working-directory: apps/sayit_app
+
+      - name: Dart unit / widget tests
+        run: flutter test
+        working-directory: apps/sayit_app
+
+      - name: Rust unit tests
+        run: cargo test --manifest-path sayit-poc/Cargo.toml
+
   # ── macOS ────────────────────────────────────────────────────────────────
   build-macos:
     runs-on: macos-latest
@@ -274,7 +312,7 @@ jobs:
 
   # ── Release ─────────────────────────────────────────────────────────────
   release:
-    needs: [build-macos, build-windows, build-linux]
+    needs: [test, build-macos, build-windows, build-linux]
     runs-on: ubuntu-latest
     if: github.event_name == 'release'
     steps:

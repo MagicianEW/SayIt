@@ -21,7 +21,7 @@ pub async fn case1_synth(reports_dir: &Path) -> Result<(bool, String, String)> {
     const SSML: &str = r#"<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="zh-CN"><voice name="zh-CN-XiaoxiaoNeural">测试文本</voice></speak>"#;
 
     let req = SynthesizeRequest {
-        ssml: SSML.to_string(),
+        text: SSML.to_string(),
         config: EdgeConfig::default(),
     };
 
@@ -156,7 +156,7 @@ pub async fn case4_boundary_offset(reports_dir: &Path) -> Result<(bool, String, 
 
     let client = sayit_edge::EdgeClient::new();
     let req = sayit_edge::SynthesizeRequest {
-        ssml: ssml.to_string(),
+        text: ssml.to_string(),
         config: sayit_edge::EdgeConfig::default(),
     };
 
@@ -293,15 +293,20 @@ pub struct BoundaryOutput {
     pub boundary_type: String,
 }
 
-pub async fn synthesize_text(opts: SynthOpts) -> anyhow::Result<SynthesisOutput> {
-    // 预检 Python 环境（给出可执行的修复提示，而不是让子进程报一个看不懂的错）
-    if let Err(e) = sayit_edge::EdgeClient::check_python_env() {
-        anyhow::bail!("Python 环境检查失败: {}", e);
-    }
+/// 检查 Python / edge_tts 环境是否可用。
+///
+/// 注意：**不要**在每次合成前调这个函数。它自己要额外拉起两个 Python 进程
+/// （查版本 + 查 `import edge_tts`），而应用是逐句合成、每句都新起一个
+/// `sayit-poc` 进程，等于一句文本多付 2 次进程启动，20 句就是 40 次纯开销。
+/// 现在只在 `--check-env`（应用启动时扫音色那一次）里调用。
+pub fn check_env() -> anyhow::Result<String> {
+    sayit_edge::EdgeClient::check_python_env().map_err(anyhow::Error::msg)
+}
 
+pub async fn synthesize_text(opts: SynthOpts) -> anyhow::Result<SynthesisOutput> {
     let client = sayit_edge::EdgeClient::new();
     let req = sayit_edge::SynthesizeRequest {
-        ssml: opts.text.clone(),
+        text: opts.text.clone(),
         config: sayit_edge::EdgeConfig {
             voice: opts.voice.clone(),
             rate: opts.rate.clone(),

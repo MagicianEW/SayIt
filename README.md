@@ -1,7 +1,7 @@
 # SayIt（说吧）
 
-> 本地桌面文本转语音（TTS）工具，支持多语种、多音色、逐句高亮。
-> 调用 Microsoft Edge 的在线 TTS 服务，合成过程在本机完成，不经过第三方服务器中转。
+> 基于 Microsoft Edge 在线语音服务的桌面 TTS 客户端，支持多语种、多音色、逐句高亮。
+> 语音合成由微软云端完成，音频流直输本地，无需第三方中转。
 
 | 平台 | 构建 |
 |------|------|
@@ -12,7 +12,7 @@
 - **多语种支持**：支持 37+ 种语言，包括中文（简体/粤语/台语）、英语、日语、韩语等
 - **多音色选择**：多种音色可选，支持按语种和性别筛选
 - **参数可调**：可调节语速、音高、音量
-- **逐句播放**：文本分句播放，逐句高亮不漂移
+- **逐句播放**：文本分句播放，逐句高亮，时间轴按已合成字节数换算
 - **导出功能**：支持导出 MP3（24kHz / 48kbps / 单声道），文件名格式 `序号_前10个字.mp3`
 - **设定导入导出**：可保存和恢复音色、语速等偏好设置
 
@@ -30,13 +30,15 @@
   Flutter 单独调试，也不用维护一份要提交进仓库的桥接生成码。
   完整取舍见 [`apps/sayit_app/notes.md`](./apps/sayit_app/notes.md)。
 - Rust workspace 三个 crate：
-  - `sayit-drm` —— Edge TTS 的 DRM Token 生成
-  - `sayit-edge` —— WebSocket 客户端，并负责调起 Python 侧的 `edge_tts`
+  - `sayit-drm` —— Edge TTS 的 DRM Token 生成（Sec-MS-GEC 等）
+  - `sayit-edge` —— 生成 Token、以子进程调起 Python `edge_tts` 完成合成
   - `sayit-poc-bin` —— 命令行入口，产物即 `sayit-poc`
 - Python 解释器的查找顺序：`SAYIT_PYTHON` 环境变量 → `~/.sayit-venv` → `python` → `python3`。
 - 音频格式被 `edge_tts` 限死：其 `Communicate.__init__` 里写死了 MP3 输出，
   没有 `output_format` 参数，**拿不到 PCM**。所以合成与导出都直接拼接 MP3 字节，
-  逐句高亮的时间轴按已写入字节数 ÷ 6 换算毫秒（48 kbps = 6000 字节/秒），精确不漂移。
+  逐句高亮的时间轴按已写入字节数 ÷ 6 换算毫秒（48 kbps = 6000 字节/秒）。
+  这是**近似**换算（每段 MP3 各自的帧头与编码器延迟会带来偏差），
+  但比按边界事件累加稳得多——后者会随句数累积滞后。
 
 ## 目录结构
 
@@ -112,6 +114,14 @@ python3 -c "import edge_tts; print('edge_tts OK')"
 ```bash
 export SAYIT_PYTHON=/path/to/your/python3
 ```
+
+### 网络要求
+
+微软 TTS 服务（`speech.platform.bing.com`）需要能访问微软服务器。网络受限环境下可能收到 403 错误。
+
+**表现**：合成时报 `403 Invalid response status`，但浏览器能正常上网。
+
+**解决方案**：使用代理/VPN，让流量通过代理节点访问微软服务。Clash Verge 等开启 TUN 模式后，建议将 `speech.platform.bing.com` 加入域名直连/绕过列表，避免 DNS 被劫持到假 IP。若仍报 403，换一个代理节点试试。
 
 ### 音频播放后端（Windows / Linux 需要）
 
@@ -203,6 +213,16 @@ gh release create v0.1.4 --title "SayIt v0.1.4" --generate-notes
   所以**产物文件名、打包进二进制的版本资源、`sayit-poc --version` 三者始终一致**。
 - 三个平台并行构建，全部成功后 `release` job 才把 `.dmg` / `.zip` / `.AppImage`
   上传到该 Release。构建产物同时保留为 Actions artifact，14 天有效。
+- **发布前先过 `test` job**：`release` 依赖 `test`，它会跑
+  `sync_version.py --check`、`sync_app_name.py --check`、`flutter analyze`、
+  `flutter test` 和 `cargo test`。任何一项失败都不会出包。
+  本地想先自查一遍：
+  ```bash
+  python3 scripts/sync_version.py --check
+  python3 scripts/sync_app_name.py --check
+  cd apps/sayit_app && flutter analyze && flutter test
+  cargo test --manifest-path sayit-poc/Cargo.toml
+  ```
 - 想只做一次测试构建、不发布，用 `workflow_dispatch` 手动触发（可指定版本号，
   留空则用仓库 `VERSION` 里的值）。
 

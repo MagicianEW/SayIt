@@ -35,8 +35,17 @@ struct Cli {
     synthesize_text: Option<String>,
 
     /// synthesize-text 的内容为 base64 编码
+    ///
+    /// 编码只是为了安全穿过命令行参数（空格、引号、中文）。
+    /// 解出来是**纯文本**，不是 SSML：`edge_tts.Communicate` 会自己转义并
+    /// 套上 SSML 模板。早先这个开关叫 `--ssml-base64`，容易让人误以为
+    /// 可以直接塞一份 SSML 进来。
     #[arg(long)]
-    ssml_base64: bool,
+    text_base64: bool,
+
+    /// 只检查 Python / edge_tts 环境，不合成
+    #[arg(long)]
+    check_env: bool,
 
     /// 列出所有可用语音
     #[arg(long)]
@@ -98,9 +107,19 @@ async fn main() -> anyhow::Result<()> {
         .filter_level(if cli.verbose { log::LevelFilter::Debug } else { log::LevelFilter::Info })
         .init();
 
+    // 环境自检：应用在启动扫音色时调一次，失败时把可执行的修复提示
+    // 原样打到 stderr。**不要**把它挪进逐句合成路径 —— 那会让每句
+    // 多付两次 Python 进程启动。
+    if cli.check_env {
+        // 出错时 anyhow 会把 Err 打到 stderr 并以非零码退出，
+        // 调用方直接读 stderr 展示给用户即可。
+        println!("{}", cases::check_env()?);
+        return Ok(());
+    }
+
     // 合成模式：直接输出 JSON 到 stdout
     if let Some(text) = cli.synthesize_text {
-        let text = if cli.ssml_base64 {
+        let text = if cli.text_base64 {
             String::from_utf8(base64::engine::general_purpose::STANDARD.decode(&text)?)?
         } else {
             text

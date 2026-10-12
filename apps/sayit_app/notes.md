@@ -10,16 +10,18 @@ Dart 用 `Process.run` 调起独立可执行程序 `sayit-poc`，Rust 把结果�
 
 ```dart
 // lib/main.dart
-final result = await Process.run(pocBinary, [
+final process = await Process.start(pocBinary, [
   '--synthesize-text=$encodedText',   // base64，避免命令行转义问题
   '--voice=$voice',
   '--rate=$rate',                     // 形如 +20% / -10%
   '--pitch=$pitchStr',                // 形如 +5Hz
   '--volume=$volumeStr',
-  '--ssml-base64',
+  '--text-base64',
 ]);
-final json = jsonDecode(result.stdout as String) as Map<String, dynamic>;
 ```
+用 `Process.start` 而不是 `Process.run`：要留住句柄，「停止」才能 kill
+正在跑的那个子进程。stdout 是整段音频的 base64（量很大），必须和
+`exitCode` 并行收，先 `await exitCode` 会把管道写满导致死锁。
 
 可执行文件由 `_pocBinaryCandidates()` 按平台给出一组候选路径依次查找
 （macOS 看 `Resources/bin/`、`MacOS/`、`Frameworks/`；Windows 看 `exeDir\bin\`、`exeDir\`；

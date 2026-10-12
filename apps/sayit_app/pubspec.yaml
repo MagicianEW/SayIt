@@ -1,7 +1,7 @@
 name: sayit_app
 description: "SayIt - local desktop TTS tool (Flutter UI + Rust sidecar process)"
 publish_to: 'none'
-version: 0.1.4
+version: 0.1.5
 
 environment:
   sdk: '>=3.4.0 <4.0.0'
@@ -30,6 +30,12 @@ dependencies:
   file_picker: ^8.0.0
   path_provider: ^2.1.0
   shared_preferences: ^2.2.2
+  # 中文 Windows 导出的 .txt 常用 GBK / GB18030 编码，dart:convert 只能解
+  # UTF-8 与 Latin-1。以前对非 UTF-8 文件只能给用户一个"按 Latin-1 读取"
+  # 的选项 —— 而 Latin-1 对 GBK 是按字节一对一映射，中文必然变乱码，
+  # 等于没有可用选项。用这个包补上真正的 GB18030 解码（与 CPython
+  # 的 codec 行为对齐），中文文件才能真的读进来。
+  charset_codec: ^0.1.1
 
 # 说明：Dart 与 Rust 之间通过 `sayit-poc` 命令行子进程通信（stdout 传 JSON），
 # 并不使用 flutter_rust_bridge / ffi / riverpod，故不再声明这些依赖。

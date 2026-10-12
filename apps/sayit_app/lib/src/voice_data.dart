@@ -31,6 +31,37 @@ class VoiceInfo {
   });
 }
 
+/// 内置音色表：给 [VoiceInfo.value] 配一份中文显示名 + 语言 / 性别分类。
+///
+/// ## 这张表是"精选子集"，不是全集
+///
+/// 实测（2026-09-30，`sayit-poc --list-voices`）：服务端当前可用 322 个音色，
+/// 本表收录 131 个。另外服务端有 233 个音色本表没收录（纯命名问题，
+/// 不影响功能）。**本表有 42 条已经被 Edge 下线**，其中包括
+/// zh-CN-YunyeNeural、zh-TW-HsiaoChiehNeural、ar-SA 全部两条等。
+///
+/// ## 为什么不下线那 42 条
+///
+/// 运行时以扫描结果为准：[`_filteredVoices`]（main.dart）会把不在
+/// `--list-voices` 结果里的条目过滤掉，所以扫描正常时它们根本不会出现。
+/// 保留它们是因为这是人工维护的中文命名表，Edge 偶尔会把下线的音色加回来，
+/// 直接删掉就丢了。代价是：**扫描失败时会退回本表全量**（见
+/// `_voiceScanFailed`），这时用户可能选到已下线的音色并在合成时报错
+/// ——状态栏会给出真实错误信息。
+///
+/// 核对方法（本机需装好 edge_tts 与 Rust 工具链）：
+///
+/// ```bash
+/// cd sayit-poc && ./target/release/sayit-poc --list-voices > /tmp/v.json
+/// python3 - <<'EOF'
+/// import json, re
+/// avail = {v['short_name'] for v in json.load(open('/tmp/v.json'))}
+/// src = open('../apps/sayit_app/lib/src/voice_data.dart', encoding='utf-8').read()
+/// vals = re.findall(r"value: '([^']+)'", src)
+/// dead = [v for v in vals if v not in avail]
+/// print(f'失效 {len(dead)}/{len(vals)}'); print('\n'.join(dead))
+/// EOF
+/// ```
 const voiceData = <VoiceInfo>[
   VoiceInfo(name: '晓晓(女)-温柔亲切', value: 'zh-CN-XiaoxiaoNeural', languageCode: 'zh-CN', languageName: '中文(简体)', gender: 'female'),
   VoiceInfo(name: '小艺(女)-青春活泼', value: 'zh-CN-XiaoyiNeural', languageCode: 'zh-CN', languageName: '中文(简体)', gender: 'female'),
@@ -59,7 +90,7 @@ const voiceData = <VoiceInfo>[
   VoiceInfo(name: '晓汝(女)-自然流畅', value: 'zh-TW-HsiaoYuNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'female'),
   VoiceInfo(name: '云泽(男)-成熟台式', value: 'zh-TW-YunjheNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'male'),
   VoiceInfo(name: '晓晨(女)-自然流畅', value: 'zh-TW-HsiaoChenNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'female'),
-  VoiceInfo(name: '晓洁(女)-自然流畅', value: 'zh-TW-HsiaoChiehNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'male'),
+  VoiceInfo(name: '晓洁(女)-自然流畅', value: 'zh-TW-HsiaoChiehNeural', languageCode: 'zh-TW', languageName: '中文(台语)', gender: 'female'),
   VoiceInfo(name: '晓艾(女)-自然流畅', value: 'zh-HK-AriaNeural', languageCode: 'zh-HK', languageName: '中文(粤语)', gender: 'female'),
   VoiceInfo(name: '萧喀(女)-港式粤语', value: 'zh-HK-HiuGaaiNeural', languageCode: 'zh-HK', languageName: '中文(粤语)', gender: 'female'),
   VoiceInfo(name: '萧曼(女)-温柔粤语', value: 'zh-HK-HiuMaanNeural', languageCode: 'zh-HK', languageName: '中文(粤语)', gender: 'female'),
@@ -165,6 +196,13 @@ const voiceData = <VoiceInfo>[
   VoiceInfo(name: '奥斯曼(男)-马来深沉', value: 'ms-MY-OsmanNeural', languageCode: 'ms-MY', languageName: '马来语', gender: 'male'),
 ];
 
+/// 语言列表。
+///
+/// 这里列的是**候选全集**，界面上实际只显示"当前真的有可用音色"的那些
+/// （见 main.dart 的 `_availableLanguages`）。原因：内置音色表里有 42 条
+/// 已被 Edge 下线，扫描过滤之后某些语言会一个音色都不剩
+/// （实测 ar-SA 阿拉伯语整个语言的男女音色都已下线），
+/// 不收敛的话用户选得进去却永远合成不出来。
 const languages = <Map<String, String>>[
   {'code': 'zh-CN', 'name': '中文(简体)'},
   {'code': 'zh-TW', 'name': '中文(台语)'},
