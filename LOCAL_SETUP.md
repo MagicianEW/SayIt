@@ -30,7 +30,7 @@ cargo --version
 ## 3. 一键跑通 PoC
 
 ```bash
-cd /Users/xingxiaoshu/开发/SayIt
+cd /path/to/SayIt   # 换成你的仓库路径
 bash scripts/run_poc.sh
 ```
 
@@ -57,9 +57,122 @@ bash scripts/run_poc.sh --skip-network
 | `boundary_offset_semantics.md` | **关键决策文件** —— 决定阶段 2 用哪种映射策略 |
 | `summary.json` | 全部用例汇总 |
 
-## 5. 跑 Flutter 端还需要什么
+## 5. Flutter 工具链
 
-- Flutter SDK（<https://docs.flutter.dev/get-started/install>）—— macOS / Windows 桌面端
+### 5.1 装 SDK 并配 PATH
+
+Flutter SDK（<https://docs.flutter.dev/get-started/install>）—— macOS / Windows 桌面端都要。
+装好后把 `bin` 目录加进 PATH（`git clone` 方式和压缩包方式二选一）：
+
+```bash
+# 方式 A：git clone（推荐，能用 git 切版本）
+git clone https://github.com/flutter/flutter.git -b stable ~/flutter
+
+# 方式 B：官方压缩包，解压到 ~/flutter 后同样要把 ~/flutter/bin 加进 PATH
+```
+
+macOS / zsh 加到 `~/.zprofile` 与 `~/.zshrc`（用带判断的写法，重复 source 不会越加越长）：
+
+```bash
+# >>> flutter toolchain >>>
+if [ -d "$HOME/flutter/bin" ]; then
+  case ":$PATH:" in
+    *":$HOME/flutter/bin:"*) ;;
+    *) export PATH="$HOME/flutter/bin:$PATH" ;;
+  esac
+fi
+# <<< flutter toolchain <<<
+```
+
+验证：
+
+```bash
+flutter --version   # Flutter 3.44.x stable / Dart 3.12.x
+flutter doctor      # 桌面端只看 Xcode(ios/macos) 与 Chrome 是否 ✓
+```
+
+> `flutter doctor` 里 Android toolchain 报红是正常的 —— 本项目只做桌面端，
+> 不需要 Android SDK。
+
+### 5.2 日常三个命令
+
+```bash
+cd apps/sayit_app
+flutter pub get     # 拉依赖
+flutter test        # 分句单测 + 界面冒烟 + 帮助文案回归（共 13 个用例）
+flutter analyze     # 静态检查
+```
+
+Rust 侧：
+
+```bash
+cargo test --manifest-path sayit-poc/Cargo.toml
+```
+
+CI 的 `test` job 会跑上面这些（外加 `sync_version.py --check` /
+`sync_app_name.py --check`），所以**本地能跑通就不用担心发版被卡**。
+
+### 5.3 ⚠️ 坑：项目路径含中文时 `flutter analyze` 会崩
+
+如果仓库路径里带非 ASCII 字符（例如本机 clone 到了 `~/开发/SayIt`），
+`flutter analyze` 会让 analysis server 崩掉并报：
+
+```
+Unhandled exception:
+FormatException: Unexpected end of input (at character 353)
+  .../开发/SayIt/apps/sayit_app/..."],"capabilities":{"window":{"workDoneProgress":true
+```
+
+这是 Dart analysis server 的 LSP 通道在**非 ASCII 的 workspace URI** 上把
+`Content-Length` 按字符数而不是字节数算，导致消息被截断。同一份代码拷到
+纯 ASCII 路径下 analyze 完全正常，所以不是代码问题。
+
+- `flutter test` **不受影响**（它走 `flutter_tester`，不经过 analysis server）。
+- CI **不受影响**：GitHub runner 的工作目录是 `/home/runner/work/SayIt/SayIt`，纯 ASCII。
+
+本地想跑 analyze，把源码同步一份到纯 ASCII 路径再跑：
+
+```bash
+rsync -a --delete --exclude build --exclude .dart_tool \
+  apps/sayit_app/ /tmp/sayit_ascii/
+cd /tmp/sayit_ascii && flutter pub get && flutter analyze
+```
+
+或直接把仓库 clone 到 `~/dev/SayIt` 这类纯 ASCII 路径。
+
+### 5.4 analyze 的既有告警（不影响 CI）
+
+当前 `flutter analyze` 会报 3 条 warning，全部来自 just_audio 的实验性 API
+（`_BytesAudioSource` 用了 `StreamAudioSource` / `StreamAudioResponse`）：
+
+```
+warning • 'StreamAudioSource' is experimental ... • lib/main.dart • experimental_member_use
+warning • 'StreamAudioResponse' is experimental ... • lib/main.dart • experimental_member_use
+warning • 'StreamAudioResponse' is experimental ... • lib/main.dart • experimental_member_use
+```
+
+所以 CI 里用的是 `flutter analyze --no-fatal-warnings --no-fatal-infos` ——
+只对真正的 error 失败。**别改成默认的 fatal-warnings，一改这 3 条就会把发版卡住。**
+
+### 5.5 `flutter pub get` 会动 `pubspec.lock`
+
+本机 Dart 版本低于 lock 文件里锁定的版本时，`pub get` 会把几个传递依赖
+降级（实测：`matcher` / `meta` / `test_api` / `vector_math`），
+`pubspec.lock` 会出现与本次改动无关的 diff。**提交前记得 `git checkout` 掉它**：
+
+```bash
+git checkout -- apps/sayit_app/pubspec.lock
+```
+
+> 例外：本次新增 `charset_codec`（为了解 GB18030）时 lock 必须带上这个依赖，
+> 那种情况下 lock 的改动要提交，只是里面会混着上面那几个无关降级 ——
+> CI 用的 Flutter 更新，会自动把它们升回去，不影响正确性。
+
+> `charset_codec` 自带一个 6.7MB 的生成代码文件（CPython 的 MBCS 编解码全表），
+> 所以**第一次**编译会明显变慢（实测首次 `flutter test` 两分钟以上），
+> 之后走增量缓存很快（5 秒）。不用怀疑是不是环境坏了。
+
+### 5.6 不需要的工具
 
 **不需要** protoc，也**不需要** `build_runner`：Dart 与 Rust 不走 flutter_rust_bridge，
 而是 `sayit-poc` 子进程 + stdout JSON（`apps/sayit_app/notes.md` 有完整说明），

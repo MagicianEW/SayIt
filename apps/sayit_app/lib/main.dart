@@ -31,6 +31,7 @@ import 'src/build_info.dart';
 import 'src/text_decoder.dart';
 import 'src/text_segmenter.dart';
 import 'src/tts_error.dart';
+import 'src/ui_panels.dart';
 import 'src/voice_data.dart';
 
 void main() {
@@ -89,11 +90,25 @@ class SayItApp extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final scheme = ColorScheme.fromSeed(seedColor: Colors.indigo);
     return MaterialApp(
       title: _kAppNameZh,
       theme: ThemeData(
-        colorScheme: ColorScheme.fromSeed(seedColor: Colors.indigo),
+        colorScheme: scheme,
         useMaterial3: true,
+        // 桌面端信息密度高一点，按钮/输入框别太占地方。
+        visualDensity: VisualDensity.compact,
+        // 滚动条统一成细条。界面上只有输入框和下方的音频列表会滚动，
+        // 样式统一后不容易误以为滑块区也在滚动。
+        scrollbarTheme: ScrollbarThemeData(
+          thickness: const WidgetStatePropertyAll(6),
+          radius: const Radius.circular(3),
+          thumbVisibility: const WidgetStatePropertyAll(false),
+        ),
+        inputDecorationTheme: const InputDecorationTheme(
+          border: OutlineInputBorder(),
+          isDense: true,
+        ),
       ),
       home: const SayItHomePage(),
     );
@@ -113,8 +128,7 @@ class SynthesisResult {
     required this.channels,
     required this.format,
     required this.boundaries,
-  });
-}
+  });}
 
 class WordBoundary {
   final int textOffset;
@@ -217,6 +231,12 @@ class _SayItHomePageState extends State<SayItHomePage> {
 
   /// 缓存对应的输入指纹：音色 + 三个参数 + 每句文本。任一项变了缓存即失效。
   String? _cachedFingerprint;
+
+  /// 音频文件列表的滚动控制器。
+  ///
+  /// 显式给一份，好让列表的滚动条由我们自己掌控（细条、只在滚动时出现），
+  /// 也避免 `PrimaryScrollController` 抢走焦点。
+  final _listScrollController = ScrollController();
 
   String _selectedVoice = 'zh-CN-XiaoxiaoNeural';
   String _selectedLanguage = 'zh-CN';
@@ -375,6 +395,7 @@ class _SayItHomePageState extends State<SayItHomePage> {
     _positionSub?.cancel();
     _durationSub?.cancel();
     _textController.dispose();
+    _listScrollController.dispose();
     _audioPlayer.dispose();
     super.dispose();
   }
@@ -1384,363 +1405,436 @@ class _SayItHomePageState extends State<SayItHomePage> {
         ],
       ),
       body: Padding(
-        padding: const EdgeInsets.all(16),
+        padding: const EdgeInsets.fromLTRB(16, 12, 16, 16),
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            // 用 Flexible 而不是裸 SingleChildScrollView：
-            // Column 给子控件的高度约束是无界的，裸 ScrollView 会把内容撑到无限高，
-            // 窗口变矮时就 RenderFlex overflowed。Flexible 让它在空间不足时收缩并可滚动。
-            Flexible(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    TextField(
-                      controller: _textController,
-                      maxLines: 5,
-                      decoration: const InputDecoration(
-                        border: OutlineInputBorder(),
-                        labelText: '输入文本',
-                        hintText: '在此输入或粘贴文本...',
+            // ── 文本输入 ────────────────────────────────────────────────
+            // 超出 maxLines 后输入框自己内部滚动，滚动条落在输入框里。
+            SectionPanel(
+              icon: Icons.edit_note,
+              title: '文本输入',
+              trailing: ValueListenableBuilder<TextEditingValue>(
+                valueListenable: _textController,
+                builder: (context, value, _) => Text(
+                  '${value.text.runes.length} 字',
+                  style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                        color: Theme.of(context).colorScheme.onSurfaceVariant,
                       ),
-                    ),
-                    const SizedBox(height: 16),
-                    SingleChildScrollView(
-                      scrollDirection: Axis.horizontal,
-                      child: Row(
-                        children: [
-                          ElevatedButton.icon(
-                            onPressed: _segmentText,
-                            icon: const Icon(Icons.segment),
-                            label: const Text('分句'),
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton.icon(
-                            onPressed: _isGenerating ? null : _generateAndPlay,
-                            icon: const Icon(Icons.play_arrow),
-                            label: const Text('生成并播放'),
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            onPressed: _isGenerating ? null : _togglePause,
-                            icon:
-                                Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
-                            tooltip: _isPlaying ? '暂停' : '继续',
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            onPressed: canStop ? _stop : null,
-                            icon: const Icon(Icons.stop),
-                            tooltip: busy ? '取消合成' : '停止',
-                          ),
-                          const SizedBox(width: 8),
-                          IconButton(
-                            onPressed: _selectExportPath,
-                            icon: const Icon(Icons.folder_open),
-                            tooltip:
-                                '保存位置${_exportPath != null ? ' ($_exportPath)' : ''}',
-                          ),
-                          const SizedBox(width: 8),
-                          ElevatedButton.icon(
-                            onPressed: _isExporting ? null : _exportAudio,
-                            icon: const Icon(Icons.save_alt),
-                            label: const Text('导出'),
-                          ),
-                          const SizedBox(width: 16),
-                          // 语言/性别下拉都按"当前真的有可用音色"收敛。
-                          // 只列有音色的语言/性别，用户才不会选到一个永远
-                          // 合成不出来的组合（内置表里约三分之一音色已被
-                          // Edge 下线，不收敛的话阿拉伯语整个语言都是死的）。
-                          DropdownButton<String>(
-                            value: _availableLanguages
-                                    .any((l) => l['code'] == _selectedLanguage)
-                                ? _selectedLanguage
-                                : null,
-                            hint: const Text('无可用语言',
-                                style: TextStyle(fontSize: 12)),
-                            items: _availableLanguages
-                                .map((l) => DropdownMenuItem(
-                                      value: l['code'],
-                                      child: Text(l['name']!,
-                                          style: const TextStyle(fontSize: 12)),
-                                    ))
-                                .toList(),
-                            onChanged: _availableLanguages.isEmpty
-                                ? null
-                                : (value) {
-                                    if (value == null) return;
-                                    setState(() {
-                                      _selectedLanguage = value;
-                                      _reconcileSelection();
-                                    });
-                                    _schedulePersist();
-                                  },
-                          ),
-                          const SizedBox(width: 4),
-                          DropdownButton<String>(
-                            value: _availableGenders
-                                    .any((g) => g['code'] == _selectedGender)
-                                ? _selectedGender
-                                : null,
-                            hint: const Text('无可用性别',
-                                style: TextStyle(fontSize: 12)),
-                            items: _availableGenders
-                                .map((g) => DropdownMenuItem(
-                                      value: g['code'],
-                                      child: Text(g['name']!,
-                                          style: const TextStyle(fontSize: 12)),
-                                    ))
-                                .toList(),
-                            onChanged: _availableGenders.isEmpty
-                                ? null
-                                : (value) {
-                                    if (value == null) return;
-                                    setState(() {
-                                      _selectedGender = value;
-                                      _pickDefaultVoice();
-                                    });
-                                    _schedulePersist();
-                                  },
-                          ),
-                          const SizedBox(width: 4),
-                          SizedBox(
-                            width: 180,
-                            child: DropdownButton<String>(
-                              // 关键：value 必须存在于 items 中，否则 Flutter 直接抛断言错误。
-                              // 过滤结果为空时传 null（显示 hint），不再沿用上一个语言的语音。
-                              value: _voiceDropdownValue,
-                              hint: const Text('无可用语音',
-                                  style: TextStyle(fontSize: 12)),
-                              isExpanded: true,
-                              items: _filteredVoices
-                                  .map((v) => DropdownMenuItem(
-                                        value: v.value,
-                                        child: Text(v.name,
-                                            overflow: TextOverflow.ellipsis,
-                                            style: const TextStyle(fontSize: 12)),
-                                      ))
-                                  .toList(),
-                              onChanged: _filteredVoices.isEmpty
-                                  ? null
-                                  : (value) {
-                                      if (value == null) return;
-                                      setState(() => _selectedVoice = value);
-                                      _schedulePersist();
-                                    },
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                    if (canStop)
-                      Padding(
-                        padding: const EdgeInsets.symmetric(vertical: 8),
-                        child: SizedBox(
-                          height: 40,
-                          child: Row(
-                            children: [
-                              SizedBox(
-                                width: 70,
-                                child: Text(_formatDuration(_currentPosition)),
-                              ),
-                              Expanded(
-                                child: Slider(
-                                  value: totalMs > 0
-                                      ? _currentPosition.inMilliseconds
-                                          .toDouble()
-                                          .clamp(0.0, totalMs.toDouble())
-                                          .toDouble()
-                                      : 0.0,
-                                  min: 0,
-                                  max: totalMs > 0 ? totalMs.toDouble() : 1.0,
-                                  onChanged: (value) {
-                                    _audioPlayer.seek(
-                                        Duration(milliseconds: value.round()));
-                                  },
-                                ),
-                              ),
-                              SizedBox(
-                                width: 70,
-                                child: Text(_formatDuration(_totalDuration)),
-                              ),
-                            ],
-                          ),
-                        ),
-                      ),
-                    const SizedBox(height: 8),
-                    Row(
-                      children: [
-                        const Text('语速'),
-                        Expanded(
-                          child: Slider(
-                            value: _speed,
-                            min: 0.5,
-                            max: 2.0,
-                            divisions: 15,
-                            label: '${(_speed * 100).round()}%',
-                            onChanged: (value) {
-                              setState(() {
-                                _speed = value;
-                              });
-                              // 拖动过程中每帧都会进来，合并后再落盘
-                              _schedulePersist();
-                            },
-                          ),
-                        ),
-                        Text('${(_speed * 100).round()}%'),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        const Text('音高'),
-                        Expanded(
-                          child: Slider(
-                            value: _pitch,
-                            min: -1.0,
-                            max: 1.0,
-                            divisions: 20,
-                            label: _pitch >= 0
-                                ? '+${(_pitch * 50).round()}Hz'
-                                : '${(_pitch * 50).round()}Hz',
-                            onChanged: (value) {
-                              setState(() {
-                                _pitch = value;
-                              });
-                              // 拖动过程中每帧都会进来，合并后再落盘
-                              _schedulePersist();
-                            },
-                          ),
-                        ),
-                        Text(_pitch >= 0
-                            ? '+${(_pitch * 50).round()}Hz'
-                            : '${(_pitch * 50).round()}Hz'),
-                      ],
-                    ),
-                    Row(
-                      children: [
-                        const Text('音量'),
-                        Expanded(
-                          child: Slider(
-                            value: _volume,
-                            min: 0.0,
-                            max: 2.0,
-                            divisions: 20,
-                            label: '${(_volume * 100).round()}%',
-                            onChanged: (value) {
-                              setState(() {
-                                _volume = value;
-                              });
-                              // 拖动过程中每帧都会进来，合并后再落盘
-                              _schedulePersist();
-                            },
-                          ),
-                        ),
-                        Text('${(_volume * 100).round()}%'),
-                      ],
-                    ),
-                    if (_statusMessage != null)
-                      Container(
-                        padding: const EdgeInsets.all(8),
-                        decoration: BoxDecoration(
-                          color: Colors.grey[200],
-                          borderRadius: BorderRadius.circular(4),
-                        ),
-                        child: SelectableText(_statusMessage!),
-                      ),
-                  ],
+                ),
+              ),
+              child: TextField(
+                controller: _textController,
+                minLines: 2,
+                maxLines: 5,
+                textAlignVertical: TextAlignVertical.top,
+                decoration: InputDecoration(
+                  hintText: '在此输入或粘贴文本…',
+                  filled: true,
+                  fillColor: Theme.of(context).colorScheme.surface,
+                  contentPadding:
+                      const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+                  border: _inputBorder(Theme.of(context)),
+                  enabledBorder: _inputBorder(Theme.of(context)),
+                  focusedBorder: _inputBorder(Theme.of(context), focused: true),
                 ),
               ),
             ),
-            const SizedBox(height: 16),
-            if (_sentences.isNotEmpty)
-              Expanded(
-                child: ListView.builder(
-                  itemCount: _sentences.length,
-                  itemBuilder: (context, index) {
-                    final sentence = _sentences[index];
-                    final isActive = index == _currentSentenceIndex;
+            const SizedBox(height: 10),
 
-                    return GestureDetector(
-                      onTap: () async {
-                        // 合成/导出进行中不允许试听：试听会另起一个
-                        // sayit-poc 并换掉播放器音源，把正在拼接的音频冲掉。
-                        if (_isGenerating || _isExporting) return;
-                        // 令牌：连续快速点不同句子时，只有最后一次的结果会被播放
-                        final token = ++_previewToken;
-                        setState(() => _currentSentenceIndex = index);
-                        // 试听用的是单句音源，而 [_sentenceAudioOffsetsMs]
-                        // 是整篇的偏移表；不置位的话 positionStream 会用整篇
-                        // 偏移算高亮，单句音频从 0ms 开始 → 高亮被拉到第 1 句。
-                        _isPreviewing = true;
-                        try {
-                          final result = await _synthesizeText(sentence.text,
-                              _selectedVoice, _speed, _pitch, _volume);
-                          // 等待期间可能又点了别的句子，或开始了合成 → 丢弃本次结果
-                          if (!mounted ||
-                              token != _previewToken ||
-                              _isGenerating ||
-                              _isExporting) {
-                            return;
-                          }
-                          await _audioPlayer.setAudioSource(
-                            _BytesAudioSource(result.audio),
-                          );
-                          await _audioPlayer.play();
-                        } catch (e) {
-                          if (!mounted) return;
-                          setState(() {
-                            _statusMessage = '试听失败：$e';
-                          });
-                        } finally {
-                          if (token == _previewToken) {
-                            _isPreviewing = false;
-                          }
-                        }
-                      },
-                      child: Container(
-                        padding: const EdgeInsets.symmetric(
-                          horizontal: 12,
-                          vertical: 8,
-                        ),
-                        margin: const EdgeInsets.only(bottom: 4),
-                        decoration: BoxDecoration(
-                          color:
-                              isActive ? Colors.indigo[100] : Colors.transparent,
-                          borderRadius: BorderRadius.circular(4),
-                          border: isActive
-                              ? Border.all(color: Colors.indigo)
-                              : null,
-                        ),
-                        child: Row(
-                          children: [
-                            SizedBox(
-                              width: 30,
-                              child: Text(
-                                '${index + 1}',
-                                style: TextStyle(
-                                  fontWeight: FontWeight.bold,
-                                  color: isActive ? Colors.indigo : Colors.grey,
-                                ),
-                              ),
-                            ),
-                            Expanded(
-                              child: Text(
-                                sentence.text,
-                                style: TextStyle(
-                                  fontSize: 16,
-                                  backgroundColor:
-                                      isActive ? Colors.indigo[50] : null,
-                                ),
-                              ),
-                            ),
-                          ],
+            // ── 操作与参数 ──────────────────────────────────────────────
+            // 这一整块**没有**外层滚动容器。
+            // 滑块一旦落在纵向 ScrollView 里，拖动时会跟外层滚动抢手势，
+            // 窗口变矮时还会冒出一条常驻滚动条 —— 界面里只保留
+            // 「输入框」和「下方列表」两处滚动。
+            SectionPanel(
+              icon: Icons.tune,
+              title: '操作与参数',
+              trailing: busy
+                  ? StatusPill(
+                      icon: Icons.autorenew,
+                      label: _isExporting ? '导出中…' : '合成中…',
+                    )
+                  : null,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  Row(
+                    children: [
+                      OutlinedButton.icon(
+                        onPressed: _segmentText,
+                        icon: const Icon(Icons.segment, size: 18),
+                        label: const Text('分句'),
+                      ),
+                      const SizedBox(width: 8),
+                      FilledButton.icon(
+                        onPressed: _isGenerating ? null : _generateAndPlay,
+                        icon: const Icon(Icons.play_arrow, size: 18),
+                        label: const Text('生成并播放'),
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        onPressed: _isGenerating ? null : _togglePause,
+                        icon: Icon(_isPlaying ? Icons.pause : Icons.play_arrow),
+                        tooltip: _isPlaying ? '暂停' : '继续',
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        onPressed: canStop ? _stop : null,
+                        icon: const Icon(Icons.stop),
+                        tooltip: busy ? '取消合成' : '停止',
+                      ),
+                      const SizedBox(width: 8),
+                      IconButton.filledTonal(
+                        onPressed: _selectExportPath,
+                        icon: const Icon(Icons.folder_open),
+                        tooltip:
+                            '保存位置${_exportPath != null ? ' ($_exportPath)' : ''}',
+                      ),
+                      const SizedBox(width: 8),
+                      OutlinedButton.icon(
+                        onPressed: _isExporting ? null : _exportAudio,
+                        icon: const Icon(Icons.save_alt, size: 18),
+                        label: const Text('导出'),
+                      ),
+                      const Spacer(),
+                    ],
+                  ),
+                  const SizedBox(height: 14),
+                  // 语言/性别下拉都按"当前真的有可用音色"收敛。
+                  // 只列有音色的语言/性别，用户才不会选到一个永远
+                  // 合成不出来的组合（内置表里约三分之一音色已被
+                  // Edge 下线，不收敛的话阿拉伯语整个语言都是死的）。
+                  Row(
+                    children: [
+                      StyledDropdown<String>(
+                        value: _availableLanguages
+                                .any((l) => l['code'] == _selectedLanguage)
+                            ? _selectedLanguage
+                            : null,
+                        hint: '无可用语言',
+                        width: 150,
+                        items: _availableLanguages
+                            .map((l) => DropdownMenuItem(
+                                  value: l['code'],
+                                  child: Text(
+                                    l['name']!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ))
+                            .toList(),
+                        onChanged: _availableLanguages.isEmpty
+                            ? null
+                            : (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _selectedLanguage = value;
+                                  _reconcileSelection();
+                                });
+                                _schedulePersist();
+                              },
+                      ),
+                      const SizedBox(width: 10),
+                      StyledDropdown<String>(
+                        value: _availableGenders
+                                .any((g) => g['code'] == _selectedGender)
+                            ? _selectedGender
+                            : null,
+                        hint: '无可用性别',
+                        width: 120,
+                        items: _availableGenders
+                            .map((g) => DropdownMenuItem(
+                                  value: g['code'],
+                                  child: Text(
+                                    g['name']!,
+                                    maxLines: 1,
+                                    overflow: TextOverflow.ellipsis,
+                                  ),
+                                ))
+                            .toList(),
+                        onChanged: _availableGenders.isEmpty
+                            ? null
+                            : (value) {
+                                if (value == null) return;
+                                setState(() {
+                                  _selectedGender = value;
+                                  _pickDefaultVoice();
+                                });
+                                _schedulePersist();
+                              },
+                      ),
+                      const SizedBox(width: 10),
+                      Expanded(
+                        // 关键：value 必须存在于 items 中，否则 Flutter 直接抛断言错误。
+                        // 过滤结果为空时传 null（显示 hint），不再沿用上一个语言的语音。
+                        child: StyledDropdown<String>(
+                          value: _voiceDropdownValue,
+                          hint: '无可用语音',
+                          items: _filteredVoices
+                              .map((v) => DropdownMenuItem(
+                                    value: v.value,
+                                    child: Text(
+                                      v.name,
+                                      overflow: TextOverflow.ellipsis,
+                                    ),
+                                  ))
+                              .toList(),
+                          onChanged: _filteredVoices.isEmpty
+                              ? null
+                              : (value) {
+                                  if (value == null) return;
+                                  setState(() => _selectedVoice = value);
+                                  _schedulePersist();
+                                },
                         ),
                       ),
-                    );
-                  },
-                ),
+                    ],
+                  ),
+                  if (canStop) ...[
+                    const SizedBox(height: 16),
+                    Row(
+                      children: [
+                        Icon(
+                          Icons.graphic_eq,
+                          size: 14,
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                        const SizedBox(width: 6),
+                        SizedBox(
+                          width: 56,
+                          child: Text(
+                            _formatDuration(_currentPosition),
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                          ),
+                        ),
+                        Expanded(
+                          child: SliderTheme(
+                            data: SliderTheme.of(context).copyWith(
+                              trackHeight: 4,
+                              activeTrackColor:
+                                  Theme.of(context).colorScheme.primary,
+                              inactiveTrackColor: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.16),
+                              thumbColor: Theme.of(context).colorScheme.primary,
+                              overlayColor: Theme.of(context)
+                                  .colorScheme
+                                  .primary
+                                  .withValues(alpha: 0.12),
+                              thumbShape: const RoundSliderThumbShape(
+                                enabledThumbRadius: 7,
+                              ),
+                              overlayShape: const RoundSliderOverlayShape(
+                                overlayRadius: 14,
+                              ),
+                            ),
+                            child: Slider(
+                              value: totalMs > 0
+                                  ? _currentPosition.inMilliseconds
+                                      .toDouble()
+                                      .clamp(0.0, totalMs.toDouble())
+                                      .toDouble()
+                                  : 0.0,
+                              min: 0,
+                              max: totalMs > 0 ? totalMs.toDouble() : 1.0,
+                              onChanged: (value) {
+                                _audioPlayer.seek(
+                                    Duration(milliseconds: value.round()));
+                              },
+                            ),
+                          ),
+                        ),
+                        SizedBox(
+                          width: 56,
+                          child: Text(
+                            _formatDuration(_totalDuration),
+                            textAlign: TextAlign.right,
+                            style: Theme.of(context)
+                                .textTheme
+                                .bodySmall
+                                ?.copyWith(
+                                  color: Theme.of(context)
+                                      .colorScheme
+                                      .onSurfaceVariant,
+                                ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                  const SizedBox(height: 10),
+                  Container(
+                    padding:
+                        const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+                    decoration: BoxDecoration(
+                      color: Theme.of(context).colorScheme.surface,
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color:
+                            Theme.of(context).colorScheme.outlineVariant,
+                      ),
+                    ),
+                    child: Column(
+                      children: [
+                        LabeledSlider(
+                          label: '语速',
+                          icon: Icons.speed,
+                          value: _speed,
+                          min: 0.5,
+                          max: 2.0,
+                          divisions: 15,
+                          valueText: '${(_speed * 100).round()}%',
+                          tooltipLabel: '${(_speed * 100).round()}%',
+                          onChanged: (value) {
+                            setState(() {
+                              _speed = value;
+                            });
+                            // 拖动过程中每帧都会进来，合并后再落盘
+                            _schedulePersist();
+                          },
+                        ),
+                        LabeledSlider(
+                          label: '音高',
+                          icon: Icons.music_note,
+                          value: _pitch,
+                          min: -1.0,
+                          max: 1.0,
+                          divisions: 20,
+                          valueText: _pitch >= 0
+                              ? '+${(_pitch * 50).round()}Hz'
+                              : '${(_pitch * 50).round()}Hz',
+                          tooltipLabel: _pitch >= 0
+                              ? '+${(_pitch * 50).round()}Hz'
+                              : '${(_pitch * 50).round()}Hz',
+                          onChanged: (value) {
+                            setState(() {
+                              _pitch = value;
+                            });
+                            // 拖动过程中每帧都会进来，合并后再落盘
+                            _schedulePersist();
+                          },
+                        ),
+                        LabeledSlider(
+                          label: '音量',
+                          icon: Icons.volume_up,
+                          value: _volume,
+                          min: 0.0,
+                          max: 2.0,
+                          divisions: 20,
+                          valueText: '${(_volume * 100).round()}%',
+                          tooltipLabel: '${(_volume * 100).round()}%',
+                          onChanged: (value) {
+                            setState(() {
+                              _volume = value;
+                            });
+                            // 拖动过程中每帧都会进来，合并后再落盘
+                            _schedulePersist();
+                          },
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_statusMessage != null) ...[
+                    const SizedBox(height: 10),
+                    StatusBanner(
+                      message: _statusMessage!,
+                      isError: _looksLikeError(_statusMessage!),
+                    ),
+                  ],
+                ],
               ),
+            ),
+            const SizedBox(height: 10),
+
+            // ── 音频文件列表 ────────────────────────────────────────────
+            // 界面里第二处（也是唯一另一处）允许滚动的地方。
+            Expanded(
+              child: SectionPanel(
+                icon: Icons.library_music,
+                title: '音频文件列表',
+                fill: true,
+                padding: const EdgeInsets.fromLTRB(16, 12, 8, 8),
+                trailing: Padding(
+                  padding: const EdgeInsets.only(right: 8),
+                  child: Text(
+                    '${_sentences.length} 句',
+                    style: Theme.of(context).textTheme.bodySmall?.copyWith(
+                          color:
+                              Theme.of(context).colorScheme.onSurfaceVariant,
+                        ),
+                  ),
+                ),
+                child: _sentences.isEmpty
+                    ? const EmptyListHint(
+                        message: '输入文本后点「分句」，这里会列出每一句。\n'
+                            '点某一句可以单独试听。',
+                      )
+                    // 列表的滚动条由 Flutter 桌面端的默认 ScrollBehavior
+                    // 自动套上（RawScrollbar），这里不要再包一层 Scrollbar，
+                    // 否则会画出两条。
+                    : ListView.builder(
+                        controller: _listScrollController,
+                        padding: const EdgeInsets.only(right: 10),
+                        itemCount: _sentences.length,
+                        itemBuilder: (context, index) {
+                          final sentence = _sentences[index];
+                          final isActive = index == _currentSentenceIndex;
+
+                          return SentenceTile(
+                            index: index,
+                            text: sentence.text,
+                            isActive: isActive,
+                            onTap: () async {
+                              // 合成/导出进行中不允许试听：试听会另起一个
+                              // sayit-poc 并换掉播放器音源，把正在拼接的音频冲掉。
+                              if (_isGenerating || _isExporting) return;
+                              // 令牌：连续快速点不同句子时，只有最后一次的结果会被播放
+                              final token = ++_previewToken;
+                              setState(() => _currentSentenceIndex = index);
+                              // 试听用的是单句音源，而 [_sentenceAudioOffsetsMs]
+                              // 是整篇的偏移表；不置位的话 positionStream 会用整篇
+                              // 偏移算高亮，单句音频从 0ms 开始 → 高亮被拉到第 1 句。
+                              _isPreviewing = true;
+                              try {
+                                final result = await _synthesizeText(sentence.text,
+                                    _selectedVoice, _speed, _pitch, _volume);
+                                // 等待期间可能又点了别的句子，或开始了合成 → 丢弃本次结果
+                                if (!mounted ||
+                                    token != _previewToken ||
+                                    _isGenerating ||
+                                    _isExporting) {
+                                  return;
+                                }
+                                await _audioPlayer.setAudioSource(
+                                  _BytesAudioSource(result.audio),
+                                );
+                                await _audioPlayer.play();
+                              } catch (e) {
+                                if (!mounted) return;
+                                setState(() {
+                                  _statusMessage = '试听失败：$e';
+                                });
+                              } finally {
+                                if (token == _previewToken) {
+                                  _isPreviewing = false;
+                                }
+                              }
+                            },
+                          );
+                        },
+                      ),
+              ),
+            ),
           ],
         ),
       ),
@@ -1760,6 +1854,25 @@ class _SayItHomePageState extends State<SayItHomePage> {
     // 以前没有小时位，超过 1 小时的音频会把 1:05:30 显示成 05:30
     return hours > 0 ? '$hours:$minutes:$seconds' : '$minutes:$seconds';
   }
+
+  /// 状态文案是不是错误。带这些词就用红色的提示条显示。
+  static bool _looksLikeError(String message) =>
+      message.contains('错误') || message.contains('失败');
+}
+
+/// 输入框的边框：聚焦时换成主色，其余时候用一条淡描边。
+OutlineInputBorder _inputBorder(
+  ThemeData theme, {
+  bool focused = false,
+}) {
+  final scheme = theme.colorScheme;
+  return OutlineInputBorder(
+    borderRadius: BorderRadius.circular(8),
+    borderSide: BorderSide(
+      color: focused ? scheme.primary : scheme.outlineVariant,
+      width: focused ? 1.5 : 1,
+    ),
+  );
 }
 
 class _BytesAudioSource extends StreamAudioSource {

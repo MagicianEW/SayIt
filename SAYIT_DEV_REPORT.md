@@ -264,7 +264,7 @@ text="句",   audio_offset_ms=1725.0, duration_ms=325.0
 
 ```bash
 # 跑全部 PoC（需联网 + venv）
-cd /Users/xingxiaoshu/开发/SayIt/sayit-poc
+cd /path/to/SayIt/sayit-poc
 bash ../scripts/run_poc.sh
 
 # 单测

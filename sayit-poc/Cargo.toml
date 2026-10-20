@@ -7,7 +7,7 @@ members = [
 ]
 
 [workspace.package]
-version = "0.1.5"
+version = "0.1.6"
 edition = "2021"
 rust-version = "1.75"
 # 与仓库根 LICENSE 及各源文件头保持一致（GPL-3.0-or-later）。

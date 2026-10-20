@@ -21,4 +21,4 @@
 /// 应用版本号。与 `VERSION` / `pubspec.yaml` / `Cargo.toml` 保持一致。
 ///
 /// 界面的「关于」对话框读这个常量，不要在 UI 里硬编码版本号。
-const String kAppVersion = '0.1.5';
+const String kAppVersion = '0.1.6';

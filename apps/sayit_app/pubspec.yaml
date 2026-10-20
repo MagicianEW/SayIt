@@ -1,7 +1,7 @@
 name: sayit_app
 description: "SayIt - local desktop TTS tool (Flutter UI + Rust sidecar process)"
 publish_to: 'none'
-version: 0.1.5
+version: 0.1.6
 
 environment:
   sdk: '>=3.4.0 <4.0.0'

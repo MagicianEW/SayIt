@@ -92,7 +92,7 @@
 ### 跑完整 PoC 收尾
 
 ```bash
-cd /Users/xingxiaoshu/开发/SayIt/sayit-poc
+cd /path/to/SayIt/sayit-poc
 cargo test --workspace
 cargo run -p sayit-poc-bin -- --case 1
 cargo run -p sayit-poc-bin -- --case 3

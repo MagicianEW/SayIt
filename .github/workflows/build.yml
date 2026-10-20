@@ -261,6 +261,12 @@ jobs:
           if [ ! -f linux/CMakeLists.txt ]; then
             flutter create --platforms=linux --org com.sayit .
           fi
+          # 限定最小窗口尺寸：界面是固定布局（输入区 + 参数区 + 列表区），
+          # 窗口再矮就会挤爆。GTK 模板里只有 set_default_size，
+          # 这里补一句 set_size_request 当最小尺寸用。
+          if [ -f linux/runner/my_application.cc ]; then
+            sed -i 's/self\.set_default_size(1280, 720);/self.set_default_size(1280, 820);\n  self.set_size_request(780, 760);/' linux/runner/my_application.cc
+          fi
           cd ../..
           python scripts/sync_app_name.py
 

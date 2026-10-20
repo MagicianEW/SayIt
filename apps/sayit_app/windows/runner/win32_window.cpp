@@ -187,6 +187,15 @@ Win32Window::MessageHandler(HWND hwnd,
       }
       return 0;
 
+    case WM_GETMINMAXINFO: {
+      // 界面是固定布局（输入区 + 参数区 + 列表区），窗口再矮就会挤爆。
+      // 限定最小尺寸，用户拖不到更小。
+      auto* min_info = reinterpret_cast<MINMAXINFO*>(lparam);
+      min_info->ptMinTrackSize.x = 780;
+      min_info->ptMinTrackSize.y = 760;
+      return 0;
+    }
+
     case WM_DPICHANGED: {
       auto newRectSize = reinterpret_cast<RECT*>(lparam);
       LONG newWidth = newRectSize->right - newRectSize->left;
