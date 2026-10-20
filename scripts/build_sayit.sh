@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-# 不要写死某台机器上的绝对路径（以前这里是 /Users/xingxiaoshu/flutter/bin/flutter，
+# 不要写死某台机器上的绝对路径（以前写的是某个开发者本机的 flutter 安装目录，
 # 换台机器就跑不了）。优先用环境变量，其次用 PATH 上的 flutter。
 FLUTTER_PATH="${FLUTTER_PATH:-$(command -v flutter || true)}"
 
